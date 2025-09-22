@@ -1,0 +1,10 @@
+speedtest-cli==2.1.3
+pymysql==1.1.0
+SQLAlchemy==2.0.23
+flask==3.0.0
+flask-cors==4.0.0
+ping3==4.0.4
+schedule==1.2.0
+requests==2.31.0
+python-dotenv==1.0.0
+pyyaml==6.0.1

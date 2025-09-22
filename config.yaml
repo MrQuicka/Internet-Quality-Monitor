@@ -1,0 +1,143 @@
+# Internet Monitor Configuration
+# Všechna nastavení lze změnit přes webové rozhraní
+
+# Základní nastavení
+general:
+  # Interval testů v minutách (minimum 1, maximum 1440)
+  test_interval: 5
+  # Povolit automatické testy
+  auto_test_enabled: true
+  # Časová zóna
+  timezone: "Europe/Prague"
+  # Jazyk rozhraní (cs/en)
+  language: "cs"
+
+# Nastavení testů
+tests:
+  # Povolit test rychlosti (náročné na data a výkon)
+  speed_test_enabled: true
+  # Interval pro test rychlosti (každý N-tý test)
+  # Např. 6 = test rychlosti každý 6. běh (při 5min intervalu = každých 30 minut)
+  speed_test_interval: 6
+  # Timeout pro speed test v sekundách
+  speed_test_timeout: 60
+  
+  # Nastavení ping testů
+  ping:
+    enabled: true
+    # Počet ping pokusů pro každý server
+    count: 10
+    # Timeout pro jednotlivý ping (sekundy)
+    timeout: 2
+    # Interval mezi pingy (sekundy)
+    interval: 0.1
+
+# Cílové servery pro ping
+ping_targets:
+  - name: "Google DNS"
+    host: "8.8.8.8"
+    enabled: true
+  - name: "Cloudflare DNS"
+    host: "1.1.1.1"
+    enabled: true
+  - name: "Seznam.cz"
+    host: "77.75.74.176"
+    enabled: true
+  - name: "Router/Gateway"
+    host: "192.168.1.1"
+    enabled: false
+  # Můžete přidat vlastní servery
+
+# Upozornění a alarmy
+alerts:
+  enabled: true
+  # Práh pro nízkou rychlost downloadu (Mbps)
+  download_threshold: 10
+  # Práh pro nízkou rychlost uploadu (Mbps)
+  upload_threshold: 5
+  # Práh pro vysoký ping (ms)
+  ping_threshold: 50
+  # Práh pro packet loss (%)
+  packet_loss_threshold: 5
+  # Práh pro uptime (%)
+  uptime_threshold: 95
+  
+  # Email notifikace (vyžaduje SMTP server)
+  email:
+    enabled: false
+    smtp_server: "smtp.gmail.com"
+    smtp_port: 587
+    smtp_user: ""
+    smtp_password: ""
+    from_email: ""
+    to_email: ""
+    # Posílat souhrn denně
+    daily_report: true
+    daily_report_time: "08:00"
+
+# Databázová nastavení
+database:
+  # Automatické čištění starých dat
+  auto_cleanup: true
+  # Uchovávat data po X dní (0 = nemazat)
+  retention_days: 90
+  # Čas spuštění čištění
+  cleanup_time: "03:00"
+
+# Webové rozhraní
+web:
+  # Port pro webové rozhraní
+  port: 5000
+  # Povolit debug režim
+  debug: false
+  # Refresh interval dashboardu (sekundy)
+  dashboard_refresh: 30
+  # Počet záznamů v historii
+  history_limit: 288  # 24 hodin při 5min intervalu
+  # Téma rozhraní (light/dark/auto)
+  theme: "auto"
+  
+  # Autentizace (volitelná)
+  auth:
+    enabled: false
+    username: "admin"
+    # Heslo by mělo být hashované, toto je pro demo
+    password: "admin"
+
+# Speedtest servery
+speedtest:
+  # Použít automatický výběr serveru
+  auto_server: true
+  # Nebo specifikovat ID preferovaného serveru
+  # Seznam serverů: https://c.speedtest.net/speedtest-servers-static.php
+  preferred_server_id: null
+  # Maximální vzdálenost serveru (km)
+  max_distance: 100
+
+# Export dat
+export:
+  # Povolit CSV export
+  csv_enabled: true
+  # Povolit JSON export  
+  json_enabled: true
+  # Cesta pro exporty
+  export_path: "/app/data/exports"
+
+# Pokročilá nastavení
+advanced:
+  # Počet worker threadů
+  worker_threads: 2
+  # Maximální velikost databázového connection poolu
+  db_pool_size: 5
+  # Logování
+  logging:
+    level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+    file: "/app/data/logs/monitor.log"
+    max_size_mb: 10
+    backup_count: 5
+  # Použít IPv6
+  use_ipv6: false
+  # DNS servery pro resolvování
+  dns_servers:
+    - "8.8.8.8"
+    - "1.1.1.1"
