@@ -11,7 +11,7 @@ import speedtest
 import ping3
 import pymysql
 from sqlalchemy import create_engine, Column, Integer, Float, DateTime, String, Boolean, desc, func
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 import requests
 import statistics
@@ -22,6 +22,8 @@ from io import StringIO, BytesIO
 import hashlib
 from functools import wraps
 from threading import Lock
+
+Base = declarative_base()
 
 # Nastavení logování
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -403,12 +405,6 @@ def api_latest():
 
 @app.route('/api/history')
 def api_history():
-    """
-    Jednoduchý endpoint pro FE: historie.
-    Podporuje query parametry:
-      - period in {hour,day,week,month}
-      - limit (int) – počet posledních záznamů, default 720
-    """
     session = Session()
     try:
         period = request.args.get('period')
@@ -425,12 +421,19 @@ def api_history():
             if period not in periods:
                 return jsonify({'error': 'Neplatná perioda'}), 400
             since = datetime.utcnow() - periods[period]
-            q = q.filter(InternetMetric.timestamp >= since)
-        else:
-            # pokud není perioda, vezmeme posledních N záznamů
-            q = q.order_by(desc(InternetMetric.timestamp)).limit(limit)
 
-        rows = q.order_by(InternetMetric.timestamp.asc()).all()
+            rows = (session.query(InternetMetric)
+                    .filter(InternetMetric.timestamp >= since)
+                    .order_by(InternetMetric.timestamp.asc())
+                    .all())
+        else:
+            # posledních N záznamů, vezmeme sestupně a v Pythonu otočíme
+            rows_desc = (session.query(InternetMetric)
+                         .order_by(InternetMetric.timestamp.desc())
+                         .limit(limit)
+                         .all())
+            rows = list(reversed(rows_desc))
+
         data = [to_front_from_model(m) for m in rows]
         return jsonify(data)
     finally:
