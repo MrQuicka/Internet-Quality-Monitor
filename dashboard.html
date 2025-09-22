@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Internet Quality Monitor</title>
 
-  <!-- Chart.js (oficiální CDN) -->
+  <!-- Chart.js -->
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
   <style>
@@ -19,33 +19,34 @@
       --warn: #f0b429;
       --bad: #f66e6e;
     }
-
     * { box-sizing: border-box; }
-
     body {
       margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Cantarell, "Helvetica Neue", Arial, "Noto Sans";
       background: var(--bg);
       color: var(--text);
       line-height: 1.45;
     }
-
     header {
       padding: 16px 20px;
       background: #151922;
       border-bottom: 1px solid #222837;
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 12px;
-      min-height: 56px; /* pro jistotu proti flex shrink bugům */
+      min-height: 56px;
     }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .2px; }
 
-    header h1 {
-      font-size: 18px;
-      margin: 0;
-      font-weight: 600;
-      letter-spacing: .2px;
+    .actions { display: flex; gap: 10px; align-items: center; }
+    .btn {
+      background: var(--accent);
+      border: 0; color: #0b1220; font-weight: 700;
+      padding: 10px 14px; border-radius: 10px; cursor: pointer;
     }
+    .btn[disabled] { opacity: .6; cursor: default; }
+    .hint { color: var(--muted); font-size: 12px; }
 
     main {
       padding: 20px;
@@ -53,21 +54,18 @@
       grid-template-columns: 1fr;
       gap: 16px;
     }
-
     .card {
       background: var(--panel);
       border: 1px solid #22283a;
       border-radius: 14px;
       padding: 16px;
-      min-width: 0;   /* důležité uvnitř grid/flex kontejnerů */
+      min-width: 0;
     }
-
     .row {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
       gap: 12px;
     }
-
     .stat {
       background: #121620;
       border: 1px solid #22283a;
@@ -75,60 +73,36 @@
       padding: 12px;
       min-height: 84px;
     }
-
-    .stat .label {
-      font-size: 12px;
-      color: var(--muted);
-    }
-
-    .stat .value {
-      margin-top: 6px;
-      font-size: 22px;
-      font-weight: 700;
-    }
-
+    .stat .label { font-size: 12px; color: var(--muted); }
+    .stat .value { margin-top: 6px; font-size: 22px; font-weight: 700; }
     .value.ok { color: var(--ok); }
     .value.warn { color: var(--warn); }
     .value.bad { color: var(--bad); }
 
-    .chart-card h2 {
-      margin: 0 0 10px 0;
-      font-size: 16px;
-      font-weight: 600;
-    }
+    .chart-card h2 { margin: 0 0 10px 0; font-size: 16px; font-weight: 600; }
 
-    /* === Klíčové fixy proti nekonečnému roztahování === */
+    /* Fix proti resize-smyčkám */
     .chart-container {
       position: relative;
       width: 100%;
-      height: 320px;   /* pevná výška */
-      min-height: 0;   /* důležité ve flex/grid kontextu */
+      height: 320px;     /* pevná výška */
+      min-height: 0;
     }
+    canvas { display: block; max-width: 100%; }
 
-    canvas {
-      display: block;
-      /* žádné height: 100% ani 100vh na canvasu */
-      max-width: 100%;
-    }
+    footer { padding: 16px 20px 28px; color: var(--muted); font-size: 12px; }
 
-    footer {
-      padding: 16px 20px 28px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    @media (max-width: 980px) {
-      .row { grid-template-columns: repeat(2, minmax(0,1fr)); }
-    }
-
-    @media (max-width: 640px) {
-      .row { grid-template-columns: 1fr; }
-    }
+    @media (max-width: 980px) { .row { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
   <header>
     <h1>Internet Quality Monitor</h1>
+    <div class="actions">
+      <button id="runBtn" class="btn">Spustit test</button>
+      <span id="runHint" class="hint"></span>
+    </div>
   </header>
 
   <main>
@@ -160,34 +134,34 @@
   </main>
 
   <footer>
-    Aktualizuje se každých 10&nbsp;s. Graf zobrazuje omezené množství bodů kvůli výkonu.
+    Aktualizace každých 10&nbsp;s • Tlačítkem lze spustit test kdykoliv ručně.
   </footer>
 
   <script>
-    // ================== Konfigurace frontendu ==================
-    const API_BASES = [
-      '/api',              // primárně
-      ''                   // fallback (pokud backend servíruje rootové cesty)
-    ];
-    const HISTORY_PATHS = ['/history', '/api/history', '/data', '/history.json'];
-    const LATEST_PATHS  = ['/latest', '/api/latest', '/data/latest'];
+    // ===== Konfigurace frontendu (pevné API cesty) =====
+    const API = {
+      HISTORY: '/api/history',
+      LATEST:  '/api/latest',
+      RUN:     '/api/run'
+    };
 
     const REFRESH_MS = 10_000;
-    const MAX_POINTS = 720;        // limit bodů v grafu (cca 2 hodiny po 10s)
+    const MAX_POINTS = 720;
     const DECIMALS   = 1;
 
-    // ================== Pomocné funkce ==================
+    // ===== Pomocné =====
     const $ = (sel) => document.querySelector(sel);
     const pingEl   = $('#pingValue');
     const jitterEl = $('#jitterValue');
     const downEl   = $('#downValue');
     const upEl     = $('#upValue');
+    const runBtn   = $('#runBtn');
+    const runHint  = $('#runHint');
 
-    function fmt(v, unit = '') {
+    function fmt(v, unit='') {
       if (v === null || v === undefined || Number.isNaN(v)) return '–';
       return `${Number(v).toFixed(DECIMALS)}${unit}`;
     }
-
     function classify(value, warn, bad) {
       if (value === null || value === undefined || Number.isNaN(value)) return '';
       if (value >= bad) return 'bad';
@@ -195,24 +169,8 @@
       return 'ok';
     }
 
-    async function tryFetch(paths) {
-      for (const base of API_BASES) {
-        for (const p of paths) {
-          const url = base.endsWith('/') || p.startsWith('/') ? `${base}${p}` : `${base}/${p}`;
-          try {
-            const r = await fetch(url, { cache: 'no-store' });
-            if (r.ok) {
-              return await r.json();
-            }
-          } catch (_) { /* zkus další variantu */ }
-        }
-      }
-      throw new Error('Nepodařilo se načíst data z žádné známé cesty.');
-    }
-
-    // ================== Chart.js – inicializace (s fixy) ==================
+    // ===== Chart.js =====
     const ctx = document.getElementById('latencyChart').getContext('2d');
-
     const chartData = {
       labels: [],
       datasets: [{
@@ -223,76 +181,52 @@
         pointRadius: 0
       }]
     };
-
     const latencyChart = new Chart(ctx, {
       type: 'line',
       data: chartData,
       options: {
         responsive: true,
-        maintainAspectRatio: false,  // KLÍČOVÉ proti resize smyčkám
-        animation: false,            // šetří CPU
+        maintainAspectRatio: false,
+        animation: false,
         parsing: false,
         normalized: true,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            mode: 'index',
-            intersect: false,
-            callbacks: {
-              label: (item) => ` ${Number(item.parsed.y).toFixed(DECIMALS)} ms`
-            }
-          }
-        },
+        plugins: { legend: { display: false } },
         scales: {
-          x: {
-            ticks: { maxRotation: 0, autoSkip: true },
-            grid: { display: false }
-          },
-          y: {
-            beginAtZero: true,
-            grid: { color: 'rgba(255,255,255,.06)' },
-            ticks: {
-              callback: (v) => `${v} ms`
-            }
-          }
+          x: { ticks: { maxRotation: 0 }, grid: { display: false } },
+          y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,.06)' }, ticks: { callback: v => `${v} ms` } }
         }
       }
     });
-
-    function pushPoint(tsLabel, valueMs) {
-      chartData.labels.push(tsLabel);
-      chartData.datasets[0].data.push(valueMs);
-
+    function pushPoint(label, val) {
+      chartData.labels.push(label);
+      chartData.datasets[0].data.push(val);
       if (chartData.labels.length > MAX_POINTS) {
         chartData.labels.shift();
         chartData.datasets[0].data.shift();
       }
-      latencyChart.update('none'); // bez animací
+      latencyChart.update('none');
     }
-
     function setStats({ ping_ms, jitter_ms, download_mbps, upload_mbps }) {
       const ping   = Number(ping_ms);
       const jitter = Number(jitter_ms);
       const down   = Number(download_mbps);
       const up     = Number(upload_mbps);
-
       pingEl.textContent   = fmt(ping, ' ms');
       jitterEl.textContent = fmt(jitter, ' ms');
       downEl.textContent   = fmt(down, ' Mb/s');
       upEl.textContent     = fmt(up, ' Mb/s');
-
-      // barevná klasifikace (volitelné – uprav prahy dle potřeby)
       pingEl.className   = `value ${classify(ping, 40, 80)}`;
       jitterEl.className = `value ${classify(jitter, 20, 40)}`;
-      downEl.className   = `value ${classify(100 - down, 60, 80)}`; // tady jen vizuální hrátka
-      upEl.className     = `value ${classify(50 - up, 20, 35)}`;
+      downEl.className   = `value`;
+      upEl.className     = `value`;
     }
 
-    // ================== Načtení historie a posledních dat ==================
+    // ===== Načítání dat =====
     async function loadHistory() {
       try {
-        const data = await tryFetch(HISTORY_PATHS);
-        // očekávaný formát: pole { ts | timestamp | time, ping_ms }
+        const r = await fetch(API.HISTORY, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`${r.status}`);
+        const data = await r.json(); // oček.: [{ts, ping_ms, ...}, ...]
         for (const row of data) {
           const ts = row.ts || row.timestamp || row.time || '';
           const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
@@ -300,48 +234,52 @@
           if (!Number.isNaN(val)) pushPoint(label, val);
         }
       } catch (e) {
-        console.warn('Historii se nepodařilo načíst:', e.message);
+        console.warn('Historie není dostupná (zatím):', e.message);
       }
     }
-
     async function fetchLatest() {
       try {
-        const rec = await tryFetch(LATEST_PATHS);
-        // očekávaný formát: { ts, ping_ms, jitter_ms, download_mbps, upload_mbps }
+        const r = await fetch(API.LATEST, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`${r.status}`);
+        const rec = await r.json();  // oček.: {ts, ping_ms, jitter_ms, download_mbps, upload_mbps}
         const ts = rec.ts || rec.timestamp || rec.time || '';
         const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
         const ping = Number(rec.ping_ms ?? rec.ping ?? rec.latency_ms ?? rec.latency);
-
         if (!Number.isNaN(ping)) pushPoint(label, ping);
-        setStats({
-          ping_ms: ping,
-          jitter_ms: rec.jitter_ms ?? rec.jitter,
-          download_mbps: rec.download_mbps ?? rec.download,
-          upload_mbps: rec.upload_mbps ?? rec.upload
-        });
+        setStats(rec);
       } catch (e) {
-        console.error('Načtení posledního záznamu selhalo:', e);
+        // ticho – jen to ještě neexistuje
       }
     }
 
-    // ================== Polling (jen jeden interval) ==================
+    // ===== Ruční test =====
+    async function runManualTest() {
+      runBtn.disabled = true;
+      runHint.textContent = 'Probíhá test...';
+      try {
+        const r = await fetch(API.RUN, { method: 'POST' });
+        if (!r.ok) throw new Error(`${r.status}`);
+        const rec = await r.json();
+        const ts = rec.ts || rec.timestamp || rec.time || '';
+        const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
+        const ping = Number(rec.ping_ms ?? rec.ping ?? rec.latency_ms ?? rec.latency);
+        if (!Number.isNaN(ping)) pushPoint(label, ping);
+        setStats(rec);
+        runHint.textContent = 'Hotovo ✔';
+      } catch (e) {
+        console.error('Ruční test selhal:', e);
+        runHint.textContent = 'Chyba testu';
+      } finally {
+        setTimeout(() => { runHint.textContent = ''; runBtn.disabled = false; }, 1500);
+      }
+    }
+    runBtn.addEventListener('click', runManualTest);
+
+    // ===== Polling (jeden interval, pauza při skryté kartě) =====
     let pollTimer = null;
-
-    function startPolling() {
-      if (pollTimer) return;
-      fetchLatest();
-      pollTimer = setInterval(fetchLatest, REFRESH_MS);
-    }
-
-    function stopPolling() {
-      if (!pollTimer) return;
-      clearInterval(pollTimer);
-      pollTimer = null;
-    }
-
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden) stopPolling(); else startPolling();
-    });
+    function startPolling() { if (!pollTimer) { fetchLatest(); pollTimer = setInterval(fetchLatest, REFRESH_MS); } }
+    function stopPolling()  { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
+    document.addEventListener('visibilitychange', () => document.hidden ? stopPolling() : startPolling());
 
     // Start
     (async function init() {

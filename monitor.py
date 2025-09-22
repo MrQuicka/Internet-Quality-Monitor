@@ -10,7 +10,7 @@ from flask_cors import CORS
 import speedtest
 import ping3
 import pymysql
-from sqlalchemy import create_engine, Column, Integer, Float, DateTime, String, Boolean, desc
+from sqlalchemy import create_engine, Column, Integer, Float, DateTime, String, Boolean, desc, func
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import requests
@@ -21,6 +21,7 @@ import csv
 from io import StringIO, BytesIO
 import hashlib
 from functools import wraps
+from threading import Lock
 
 # Nastavení logování
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -88,12 +89,72 @@ class InternetMetric(Base):
     download_speed = Column(Float)  # Mbps
     upload_speed = Column(Float)    # Mbps
     packet_loss = Column(Float)     # procenta
-    jitter = Column(Float)           # ms
+    jitter = Column(Float)          # ms
     is_online = Column(Boolean, default=True)
     isp_name = Column(String(100))
     server_location = Column(String(100))
     external_ip = Column(String(50))
 
+# ===== Pomocné funkce pro sjednocený výstup do frontendu =====
+def _pick_main_ping_dict(d: dict):
+    """Vyber hlavní ping z dictu (v ms)."""
+    for key in ('ping_google_dns', 'ping_cloudflare_dns', 'ping_seznam_cz'):
+        if d.get(key) is not None:
+            return float(d[key])
+    # fallback: najdi první ping_* klíč
+    for k, v in d.items():
+        if k.startswith('ping_') and v is not None:
+            return float(v)
+    return None
+
+def _pick_main_ping_model(m: InternetMetric):
+    for attr in ('ping_google_dns', 'ping_cloudflare_dns', 'ping_seznam_cz'):
+        val = getattr(m, attr, None)
+        if val is not None:
+            return float(val)
+    # fallback: projdi všechny atributy modelu
+    for c in InternetMetric.__table__.columns:
+        if c.name.startswith('ping_'):
+            val = getattr(m, c.name)
+            if val is not None:
+                return float(val)
+    return None
+
+def to_front_from_model(m: InternetMetric) -> dict:
+    """Serializace záznamu z DB -> jednotný formát pro FE."""
+    return {
+        'ts': m.timestamp.isoformat() if isinstance(m.timestamp, datetime) else m.timestamp,
+        'ping_ms': _pick_main_ping_model(m),
+        'jitter_ms': float(m.jitter) if m.jitter is not None else None,
+        'download_mbps': float(m.download_speed) if m.download_speed is not None else None,
+        'upload_mbps': float(m.upload_speed) if m.upload_speed is not None else None,
+        'packet_loss': float(m.packet_loss) if m.packet_loss is not None else None,
+        'online': bool(m.is_online) if m.is_online is not None else None,
+        'isp': m.isp_name,
+        'server_location': m.server_location,
+        'external_ip': m.external_ip
+    }
+
+def to_front_from_metrics(metrics: dict) -> dict:
+    """Serializace dictu vráceného run_test() -> jednotný formát pro FE."""
+    ts = metrics.get('timestamp')
+    if isinstance(ts, datetime):
+        ts = ts.isoformat()
+    out = {
+        'ts': ts,
+        'ping_ms': _pick_main_ping_dict(metrics),
+        'jitter_ms': metrics.get('jitter'),
+        'download_mbps': metrics.get('download_speed'),
+        'upload_mbps': metrics.get('upload_speed'),
+        'packet_loss': metrics.get('packet_loss'),
+        'online': metrics.get('is_online'),
+        'isp': metrics.get('isp_name'),
+        'server_location': metrics.get('server_location'),
+        'external_ip': metrics.get('external_ip')
+    }
+    return out
+
+# ===== Monitor =====
 class NetworkMonitor:
     def __init__(self):
         self.config = CONFIG
@@ -180,8 +241,8 @@ class NetworkMonitor:
             logger.error(f"Chyba při testu rychlosti: {e}")
             return None
     
-    def run_test(self):
-        """Hlavní testovací funkce"""
+    def run_test(self, force_speed: bool = False):
+        """Hlavní testovací funkce. `force_speed=True` vynutí speedtest i mimo interval."""
         logger.info("Spouštím kompletní test připojení...")
         self.test_count += 1
         
@@ -192,18 +253,18 @@ class NetworkMonitor:
         
         # Test pingů pokud je povolen
         if self.config.get('tests', {}).get('ping', {}).get('enabled', True):
-            ping_results = {}
             jitters = []
             packet_losses = []
             
             for name, host in self.test_hosts.items():
                 ping, jitter, loss = self.measure_ping(host)
                 if ping is not None:
-                    # Uložení do správného sloupce v databázi
                     column_name = f'ping_{name}'
                     metrics[column_name] = round(ping, 2)
-                    jitters.append(jitter)
-                    packet_losses.append(loss)
+                    if jitter is not None:
+                        jitters.append(jitter)
+                    if loss is not None:
+                        packet_losses.append(loss)
                     metrics['is_online'] = True
             
             if jitters:
@@ -211,12 +272,13 @@ class NetworkMonitor:
             if packet_losses:
                 metrics['packet_loss'] = round(statistics.mean(packet_losses), 2)
         
-        # Test rychlosti (pouze pokud je povolen a je správný interval)
+        # Test rychlosti (pouze pokud je povolen)
         speed_test_enabled = self.config.get('tests', {}).get('speed_test_enabled', True)
         speed_test_interval = self.config.get('tests', {}).get('speed_test_interval', 6)
         
         if metrics['is_online'] and speed_test_enabled:
-            if self.test_count % speed_test_interval == 0:
+            should_run_speed = force_speed or (self.test_count % speed_test_interval == 0)
+            if should_run_speed:
                 speed_results = self.run_speed_test()
                 if speed_results:
                     metrics.update(speed_results)
@@ -232,9 +294,12 @@ class NetworkMonitor:
         # Kontrola prahových hodnot pro alarmy
         self.check_alerts(metrics)
         
-        logger.info(f"Test dokončen: Download: {metrics.get('download_speed', 'N/A')} Mbps, "
-                   f"Upload: {metrics.get('upload_speed', 'N/A')} Mbps, "
-                   f"Ping: {metrics.get('ping_google_dns', 'N/A')} ms")
+        logger.info(
+            "Test dokončen: Download: %s Mbps, Upload: %s Mbps, Ping: %s ms",
+            metrics.get('download_speed', 'N/A'),
+            metrics.get('upload_speed', 'N/A'),
+            metrics.get('ping_google_dns', metrics.get('ping_cloudflare_dns', metrics.get('ping_seznam_cz', 'N/A')))
+        )
         
         return metrics
     
@@ -289,24 +354,24 @@ class NetworkMonitor:
 # Globální instance monitoru - bude inicializována v main
 monitor = None
 
-# Flask routes
+# ===== Flask routes =====
 @app.route('/api/status')
 def get_status():
-    """Získání aktuálního stavu"""
+    """Získání aktuálního stavu (poslední záznam) – legacy struktura."""
     session = Session()
     try:
         latest = session.query(InternetMetric).order_by(desc(InternetMetric.timestamp)).first()
         if latest:
             # Dynamické získání všech ping hodnot
             ping_data = {}
-            for attr in dir(latest):
-                if attr.startswith('ping_') and not attr.startswith('_'):
-                    value = getattr(latest, attr)
+            for c in InternetMetric.__table__.columns:
+                if c.name.startswith('ping_'):
+                    value = getattr(latest, c.name)
                     if value is not None:
-                        ping_data[attr] = value
+                        ping_data[c.name] = value
             
             # Získání první ping hodnoty pro hlavní zobrazení
-            main_ping = latest.ping_google_dns or latest.ping_cloudflare_dns or next(iter(ping_data.values()), None) if ping_data else None
+            main_ping = _pick_main_ping_model(latest)
             
             return jsonify({
                 'online': latest.is_online,
@@ -321,6 +386,53 @@ def get_status():
                 'external_ip': latest.external_ip
             })
         return jsonify({'error': 'Žádná data k dispozici'}), 404
+    finally:
+        session.close()
+
+@app.route('/api/latest')
+def api_latest():
+    """Jednoduchý endpoint pro FE: vrátí poslední záznam v jednotném formátu."""
+    session = Session()
+    try:
+        m = session.query(InternetMetric).order_by(desc(InternetMetric.timestamp)).first()
+        if not m:
+            return ('', 204)
+        return jsonify(to_front_from_model(m))
+    finally:
+        session.close()
+
+@app.route('/api/history')
+def api_history():
+    """
+    Jednoduchý endpoint pro FE: historie.
+    Podporuje query parametry:
+      - period in {hour,day,week,month}
+      - limit (int) – počet posledních záznamů, default 720
+    """
+    session = Session()
+    try:
+        period = request.args.get('period')
+        limit = request.args.get('limit', type=int) or 720
+
+        q = session.query(InternetMetric)
+        if period:
+            periods = {
+                'hour': timedelta(hours=1),
+                'day': timedelta(days=1),
+                'week': timedelta(days=7),
+                'month': timedelta(days=30)
+            }
+            if period not in periods:
+                return jsonify({'error': 'Neplatná perioda'}), 400
+            since = datetime.utcnow() - periods[period]
+            q = q.filter(InternetMetric.timestamp >= since)
+        else:
+            # pokud není perioda, vezmeme posledních N záznamů
+            q = q.order_by(desc(InternetMetric.timestamp)).limit(limit)
+
+        rows = q.order_by(InternetMetric.timestamp.asc()).all()
+        data = [to_front_from_model(m) for m in rows]
+        return jsonify(data)
     finally:
         session.close()
 
@@ -443,7 +555,7 @@ def cleanup_database():
 
 @app.route('/api/history/<period>')
 def get_history(period):
-    """Získání historie (hour, day, week, month)"""
+    """Získání historie (hour, day, week, month) – legacy endpoint, zachován kvůli kompatibilitě."""
     session = Session()
     try:
         periods = {
@@ -463,9 +575,7 @@ def get_history(period):
         
         data = []
         for m in metrics:
-            # Získání první dostupné ping hodnoty
-            ping_value = m.ping_google_dns or m.ping_cloudflare_dns or m.ping_seznam_cz
-            
+            ping_value = _pick_main_ping_model(m)
             data.append({
                 'timestamp': m.timestamp.isoformat(),
                 'download': m.download_speed,
@@ -482,12 +592,9 @@ def get_history(period):
 
 @app.route('/api/statistics')
 def get_statistics():
-    """Získání statistik"""
+    """Získání statistik (24h) – legacy struktura, zachována pro stávající stránku."""
     session = Session()
     try:
-        from sqlalchemy import func
-        
-        # Statistiky za posledních 24 hodin
         since = datetime.utcnow() - timedelta(days=1)
         
         stats = session.query(
@@ -526,22 +633,31 @@ def get_statistics():
 
 @app.route('/api/test')
 def trigger_test():
-    """Manuální spuštění testu"""
+    """Manuální spuštění testu (legacy). Spouští i speedtest hned."""
     if monitor:
-        result = monitor.run_test()
-        return jsonify(result)
+        result = monitor.run_test(force_speed=True)
+        return jsonify(to_front_from_metrics(result))
+    else:
+        return jsonify({'error': 'Monitor není inicializován'}), 500
+
+@app.route('/api/run', methods=['POST'])
+def api_run():
+    """Nový ruční endpoint používaný dashboardem. Spouští i speedtest hned."""
+    if monitor:
+        result = monitor.run_test(force_speed=True)
+        return jsonify(to_front_from_metrics(result))
     else:
         return jsonify({'error': 'Monitor není inicializován'}), 500
 
 @app.route('/')
 def dashboard():
     """Jednoduché webové rozhraní"""
-    # Načteme HTML z externího souboru nebo použijeme embedded verzi
     html_path = '/app/dashboard.html'
     if os.path.exists(html_path):
         with open(html_path, 'r', encoding='utf-8') as f:
             return f.read()
-    else:        
+    else:
+        # Embedded fallback (legacy)
         return render_template_string('''
         <!DOCTYPE html>
         <html>
@@ -559,7 +675,8 @@ def dashboard():
                 .offline { color: #f44336; }
                 button { background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
                 button:hover { background: #1976D2; }
-                #chart { height: 400px; margin-top: 20px; }
+                #chartWrap { position: relative; height: 400px; } /* pevná výška, fix proti resize loop */
+                #chart { height: 100%; width: 100%; }
             </style>
             <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         </head>
@@ -596,7 +713,7 @@ def dashboard():
                 
                 <div class="card">
                     <h2>Historie (posledních 24 hodin)</h2>
-                    <canvas id="chart"></canvas>
+                    <div id="chartWrap"><canvas id="chart"></canvas></div>
                 </div>
                 
                 <div class="card">
@@ -628,7 +745,7 @@ def dashboard():
                                 <div class="label">Upload</div>
                             </div>
                             <div class="metric">
-                                <div class="value">${data.ping ? data.ping.toFixed(1) : '--'} ms</div>
+                                <div class="value">${data.ping ? Number(data.ping).toFixed(1) : '--'} ms</div>
                                 <div class="label">Ping</div>
                             </div>
                             <div class="metric">
@@ -643,32 +760,30 @@ def dashboard():
                 
                 async function loadHistory() {
                     try {
-                        const response = await fetch('/api/history/day');
+                        const response = await fetch('/api/history?period=day');
                         const data = await response.json();
                         
                         const ctx = document.getElementById('chart').getContext('2d');
                         
-                        if (chart) {
-                            chart.destroy();
-                        }
+                        if (chart) chart.destroy();
                         
                         chart = new Chart(ctx, {
                             type: 'line',
                             data: {
-                                labels: data.map(d => new Date(d.timestamp).toLocaleTimeString()),
+                                labels: data.map(d => new Date(d.ts).toLocaleTimeString()),
                                 datasets: [{
                                     label: 'Download (Mbps)',
-                                    data: data.map(d => d.download),
+                                    data: data.map(d => d.download_mbps),
                                     borderColor: 'rgb(75, 192, 192)',
                                     tension: 0.1
                                 }, {
                                     label: 'Upload (Mbps)',
-                                    data: data.map(d => d.upload),
+                                    data: data.map(d => d.upload_mbps),
                                     borderColor: 'rgb(255, 99, 132)',
                                     tension: 0.1
                                 }, {
                                     label: 'Ping (ms)',
-                                    data: data.map(d => d.ping),
+                                    data: data.map(d => d.ping_ms),
                                     borderColor: 'rgb(54, 162, 235)',
                                     tension: 0.1,
                                     yAxisID: 'y1'
@@ -695,9 +810,7 @@ def dashboard():
                                             display: true,
                                             text: 'Ping (ms)'
                                         },
-                                        grid: {
-                                            drawOnChartArea: false
-                                        }
+                                        grid: { drawOnChartArea: false }
                                     }
                                 }
                             }
@@ -741,9 +854,8 @@ def dashboard():
                 }
                 
                 async function runTest() {
-                    alert('Test byl spuštěn. Může trvat až minutu...');
                     try {
-                        await fetch('/api/test');
+                        await fetch('/api/run', { method: 'POST' });
                         setTimeout(() => {
                             loadStatus();
                             loadHistory();
@@ -838,7 +950,7 @@ if __name__ == '__main__':
     scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
     scheduler_thread.start()
     
-    logger.info(f"Internet Monitor byl spuštěn")
+    logger.info("Internet Monitor byl spuštěn")
     logger.info(f"Web interface je dostupný na http://localhost:{CONFIG.get('web', {}).get('port', 5000)}")
     
     # Spuštění Flask serveru
