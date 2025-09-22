@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <title>Internet Monitor</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+        }
+        
+        html, body {
+            height: 100%;
+            overflow-x: hidden;
+        }
+        
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container { 
+            max-width: 1400px; 
+            margin: 0 auto;
+            padding-bottom: 40px;
+        }
+        
+        h1 {
+            color: white;
+            text-align: center;
+            margin-bottom: 30px;
+            font-size: clamp(1.5rem, 4vw, 2.5rem);
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.2);
+        }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .tab {
+            background: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 25px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        
+        .tab:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        
+        .tab.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .card { 
+            background: white; 
+            padding: 25px; 
+            margin: 15px 0; 
+            border-radius: 15px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        
+        .card h2 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.5rem;
+            border-bottom: 2px solid #f0f0f0;
+            padding-bottom: 10px;
+        }
+        
+        .status { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+        }
+        
+        .metric { 
+            text-align: center;
+            padding: 15px;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            border-radius: 10px;
+            transition: transform 0.3s;
+        }
+        
+        .metric:hover {
+            transform: scale(1.05);
+        }
+        
+        .metric .value { 
+            font-size: clamp(1.2rem, 3vw, 2rem);
+            font-weight: bold; 
+            color: #333; 
+            margin-bottom: 5px;
+        }
+        
+        .metric .label { 
+            color: #666; 
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .online { color: #4CAF50; }
+        .offline { color: #f44336; }
+        
+        button { 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white; 
+            border: none; 
+            padding: 12px 24px; 
+            border-radius: 25px; 
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 500;
+            transition: all 0.3s;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            margin: 5px;
+        }
+        
+        button:hover { 
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0,0,0,0.15);
+        }
+        
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        /* DŮLEŽITÉ: Fixní výška pro graf container */
+        .chart-container {
+            position: relative;
+            height: 400px;
+            width: 100%;
+            margin-top: 20px;
+        }
+        
+        canvas {
+            max-width: 100%;
+            height: auto !important;
+        }
+        
+        /* Nastavení formuláře */
+        .settings-section {
+            margin-bottom: 30px;
+        }
+        
+        .settings-section h3 {
+            color: #555;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .form-group label {
+            flex: 0 0 200px;
+            color: #666;
+            font-weight: 500;
+            min-width: 150px;
+        }
+        
+        .form-group input,
+        .form-group select {
+            flex: 1;
+            min-width: 100px;
+            max-width: 300px;
+            padding: 8px 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+        
+        .form-group input:focus,
+        .form-group select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .form-group input[type="checkbox"] {
+            flex: 0;
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+        
+        .form-group input[type="number"] {
+            max-width: 100px;
+        }
+        
+        .form-group .unit {
+            flex: 0;
+            color: #999;
+            font-size: 14px;
+        }
+        
+        .ping-target {
+            background: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+        }
+        
+        .ping-target-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .success-message,
+        .error-message {
+            padding: 10px 20px;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: none;
+        }
+        
+        .success-message {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .error-message {
+            background: #f44336;
+            color: white;
+        }
+        
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        /* Responzivní design */
+        @media (max-width: 768px) {
+            .container {
+                padding: 10px;
+            }
+            
+            .form-group {
+                flex-direction: column;
+                align-items: flex-start;
+            }
+            
+            .form-group label {
+                flex: 1;
+                width: 100%;
+            }
+            
+            .form-group input,
+            .form-group select {
+                width: 100%;
+                max-width: 100%;
+            }
+            
+            .status {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            }
+            
+            .tabs {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .tab {
+                text-align: center;
+            }
+            
+            .chart-container {
+                height: 300px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1.5rem;
+            }
+            
+            .card {
+                padding: 15px;
+            }
+            
+            .metric .value {
+                font-size: 1.2rem;
+            }
+            
+            .chart-container {
+                height: 250px;
+            }
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 Monitor kvality internetového připojení</h1>
+        
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('dashboard', event)">📊 Dashboard</button>
+            <button class="tab" onclick="switchTab('history', event)">📈 Historie</button>
+            <button class="tab" onclick="switchTab('statistics', event)">📉 Statistiky</button>
+            <button class="tab" onclick="switchTab('settings', event)">⚙️ Nastavení</button>
+            <button class="tab" onclick="switchTab('export', event)">💾 Export</button>
+        </div>
+        
+        <!-- Dashboard Tab -->
+        <div id="dashboard" class="tab-content active">
+            <div class="card">
+                <h2>Aktuální stav</h2>
+                <div id="currentStatus" class="status">
+                    <div class="metric">
+                        <div class="value">--</div>
+                        <div class="label">Status</div>
+                    </div>
+                </div>
+                <div class="button-group">
+                    <button onclick="runTest()">🚀 Spustit test nyní</button>
+                    <button onclick="loadStatus()">🔄 Aktualizovat</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- History Tab -->
+        <div id="history" class="tab-content">
+            <div class="card">
+                <h2>Historie měření</h2>
+                <div class="button-group">
+                    <button onclick="loadHistory('hour')">1 hodina</button>
+                    <button onclick="loadHistory('day')">24 hodin</button>
+                    <button onclick="loadHistory('week')">7 dní</button>
+                    <button onclick="loadHistory('month')">30 dní</button>
+                </div>
+                <div class="chart-container">
+                    <canvas id="chart"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Statistics Tab -->
+        <div id="statistics" class="tab-content">
+            <div class="card">
+                <h2>Statistiky za posledních 24 hodin</h2>
+                <div id="statisticsContent" class="status"></div>
+            </div>
+        </div>
+        
+        <!-- Settings Tab -->
+        <div id="settings" class="tab-content">
+            <div class="card">
+                <h2>⚙️ Nastavení aplikace</h2>
+                <div id="success-message" class="success-message"></div>
+                <div id="error-message" class="error-message"></div>
+                
+                <div class="settings-section">
+                    <h3>📅 Základní nastavení</h3>
+                    <div class="form-group">
+                        <label>Interval testů:</label>
+                        <input type="number" id="test_interval" min="1" max="1440">
+                        <span class="unit">minut</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Automatické testy:</label>
+                        <input type="checkbox" id="auto_test_enabled">
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>🚀 Nastavení testů rychlosti</h3>
+                    <div class="form-group">
+                        <label>Povolit test rychlosti:</label>
+                        <input type="checkbox" id="speed_test_enabled">
+                    </div>
+                    <div class="form-group">
+                        <label>Interval testu rychlosti:</label>
+                        <input type="number" id="speed_test_interval" min="1" max="100">
+                        <span class="unit">každý N-tý test</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>📡 Nastavení ping testů</h3>
+                    <div class="form-group">
+                        <label>Povolit ping testy:</label>
+                        <input type="checkbox" id="ping_enabled">
+                    </div>
+                    <div class="form-group">
+                        <label>Počet ping pokusů:</label>
+                        <input type="number" id="ping_count" min="1" max="50">
+                    </div>
+                    <div class="form-group">
+                        <label>Timeout pingu:</label>
+                        <input type="number" id="ping_timeout" min="1" max="10" step="0.5">
+                        <span class="unit">sekund</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>🎯 Cíle pro ping</h3>
+                    <div id="ping-targets"></div>
+                    <button onclick="addPingTarget()">➕ Přidat cíl</button>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>🚨 Upozornění a alarmy</h3>
+                    <div class="form-group">
+                        <label>Povolit alarmy:</label>
+                        <input type="checkbox" id="alerts_enabled">
+                    </div>
+                    <div class="form-group">
+                        <label>Práh download:</label>
+                        <input type="number" id="download_threshold" min="0" step="0.5">
+                        <span class="unit">Mbps</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Práh upload:</label>
+                        <input type="number" id="upload_threshold" min="0" step="0.5">
+                        <span class="unit">Mbps</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Práh ping:</label>
+                        <input type="number" id="ping_threshold" min="0">
+                        <span class="unit">ms</span>
+                    </div>
+                    <div class="form-group">
+                        <label>Práh packet loss:</label>
+                        <input type="number" id="packet_loss_threshold" min="0" max="100" step="0.1">
+                        <span class="unit">%</span>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <h3>🗄️ Databáze</h3>
+                    <div class="form-group">
+                        <label>Automatické čištění:</label>
+                        <input type="checkbox" id="auto_cleanup">
+                    </div>
+                    <div class="form-group">
+                        <label>Uchovávat data:</label>
+                        <input type="number" id="retention_days" min="0" max="365">
+                        <span class="unit">dní (0 = nemazat)</span>
+                    </div>
+                </div>
+                
+                <div class="button-group">
+                    <button onclick="saveSettings()">💾 Uložit nastavení</button>
+                    <button onclick="loadSettings()">🔄 Načíst aktuální</button>
+                    <button onclick="resetSettings()">🔁 Výchozí nastavení</button>
+                    <button onclick="cleanupDatabase()">🗑️ Vyčistit databázi</button>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Export Tab -->
+        <div id="export" class="tab-content">
+            <div class="card">
+                <h2>💾 Export dat</h2>
+                <p style="margin-bottom: 20px;">Exportujte naměřená data pro další analýzu nebo zálohování.</p>
+                <div class="export-buttons">
+                    <button onclick="exportData('csv')">📄 Export CSV</button>
+                    <button onclick="exportData('json')">📦 Export JSON</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let chart = null;
+        let currentConfig = {};
+        
+        // Přepínání záložek
+        function switchTab(tabName, event) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            event.target.classList.add('active');
+            document.getElementById(tabName).classList.add('active');
+            
+            if (tabName === 'statistics') {
+                loadStatistics();
+            } else if (tabName === 'settings') {
+                loadSettings();
+            } else if (tabName === 'history') {
+                loadHistory('day');
+            }
+        }
+        
+        // Načtení aktuálního stavu
+        async function loadStatus() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                
+                let statusHTML = `
+                    <div class="metric">
+                        <div class="value ${data.online ? 'online' : 'offline'}">${data.online ? '✅ Online' : '❌ Offline'}</div>
+                        <div class="label">Status</div>
+                    </div>`;
+                
+                if (data.download !== null && data.download !== undefined) {
+                    statusHTML += `
+                    <div class="metric">
+                        <div class="value">${data.download || '0'}</div>
+                        <div class="label">Download Mbps</div>
+                    </div>`;
+                }
+                
+                if (data.upload !== null && data.upload !== undefined) {
+                    statusHTML += `
+                    <div class="metric">
+                        <div class="value">${data.upload || '0'}</div>
+                        <div class="label">Upload Mbps</div>
+                    </div>`;
+                }
+                
+                // Zobrazení všech ping hodnot
+                if (data.ping_data) {
+                    for (const [key, value] of Object.entries(data.ping_data)) {
+                        const label = key.replace('ping_', '').replace(/_/g, ' ');
+                        statusHTML += `
+                        <div class="metric">
+                            <div class="value">${value ? value.toFixed(1) : '0'}</div>
+                            <div class="label">${label} ms</div>
+                        </div>`;
+                    }
+                }
+                
+                if (data.packet_loss !== null && data.packet_loss !== undefined) {
+                    statusHTML += `
+                    <div class="metric">
+                        <div class="value">${data.packet_loss || '0'}</div>
+                        <div class="label">Packet Loss %</div>
+                    </div>`;
+                }
+                
+                if (data.jitter !== null && data.jitter !== undefined) {
+                    statusHTML += `
+                    <div class="metric">
+                        <div class="value">${data.jitter || '0'}</div>
+                        <div class="label">Jitter ms</div>
+                    </div>`;
+                }
+                
+                if (data.external_ip) {
+                    statusHTML += `
+                    <div class="metric">
+                        <div class="value" style="font-size: 1rem;">${data.external_ip}</div>
+                        <div class="label">IP Adresa</div>
+                    </div>`;
+                }
+                
+                document.getElementById('currentStatus').innerHTML = statusHTML;
+            } catch (e) {
+                console.error('Error loading status:', e);
+            }
+        }
+        
+        // Načtení historie s opraveným grafem
+        async function loadHistory(period) {
+            try {
+                const response = await fetch(`/api/history/${period}`);
+                const data = await response.json();
+                
+                const ctx = document.getElementById('chart').getContext('2d');
+                
+                if (chart) {
+                    chart.destroy();
+                }
+                
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.map(d => new Date(d.timestamp).toLocaleString('cs-CZ')),
+                        datasets: [{
+                            label: 'Download (Mbps)',
+                            data: data.map(d => d.download),
+                            borderColor: 'rgb(75, 192, 192)',
+                            backgroundColor: 'rgba(75, 192, 192, 0.1)',
+                            tension: 0.3
+                        }, {
+                            label: 'Upload (Mbps)',
+                            data: data.map(d => d.upload),
+                            borderColor: 'rgb(255, 99, 132)',
+                            backgroundColor: 'rgba(255, 99, 132, 0.1)',
+                            tension: 0.3
+                        }, {
+                            label: 'Ping (ms)',
+                            data: data.map(d => d.ping),
+                            borderColor: 'rgb(54, 162, 235)',
+                            backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                            tension: 0.3,
+                            yAxisID: 'y1'
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        plugins: {
+                            legend: {
+                                display: true,
+                                position: 'top'
+                            },
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false
+                            }
+                        },
+                        scales: {
+                            y: {
+                                type: 'linear',
+                                display: true,
+                                position: 'left',
+                                title: {
+                                    display: true,
+                                    text: 'Rychlost (Mbps)'
+                                }
+                            },
+                            y1: {
+                                type: 'linear',
+                                display: true,
+                                position: 'right',
+                                title: {
+                                    display: true,
+                                    text: 'Ping (ms)'
+                                },
+                                grid: {
+                                    drawOnChartArea: false
+                                }
+                            }
+                        }
+                    }
+                });
+            } catch (e) {
+                console.error('Error loading history:', e);
+            }
+        }
+        
+        // Načtení statistik
+        async function loadStatistics() {
+            try {
+                const response = await fetch('/api/statistics');
+                const data = await response.json();
+                
+                const statsHTML = `
+                    <div class="metric">
+                        <div class="value">${data.uptime}%</div>
+                        <div class="label">Uptime</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.download.avg}</div>
+                        <div class="label">⌀ Download Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.download.min}</div>
+                        <div class="label">Min Download Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.download.max}</div>
+                        <div class="label">Max Download Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.upload.avg}</div>
+                        <div class="label">⌀ Upload Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.upload.min}</div>
+                        <div class="label">Min Upload Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.upload.max}</div>
+                        <div class="label">Max Upload Mbps</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.ping}</div>
+                        <div class="label">⌀ Ping ms</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.packet_loss}</div>
+                        <div class="label">⌀ Packet Loss %</div>
+                    </div>
+                    <div class="metric">
+                        <div class="value">${data.total_tests}</div>
+                        <div class="label">Počet testů</div>
+                    </div>`;
+                
+                document.getElementById('statisticsContent').innerHTML = statsHTML;
+            } catch (e) {
+                console.error('Error loading statistics:', e);
+            }
+        }
+        
+        // Načtení nastavení
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/config');
+                currentConfig = await response.json();
+                
+                // Základní nastavení
+                document.getElementById('test_interval').value = currentConfig.general?.test_interval || 5;
+                document.getElementById('auto_test_enabled').checked = currentConfig.general?.auto_test_enabled !== false;
+                
+                // Test rychlosti
+                document.getElementById('speed_test_enabled').checked = currentConfig.tests?.speed_test_enabled !== false;
+                document.getElementById('speed_test_interval').value = currentConfig.tests?.speed_test_interval || 6;
+                
+                // Ping testy
+                document.getElementById('ping_enabled').checked = currentConfig.tests?.ping?.enabled !== false;
+                document.getElementById('ping_count').value = currentConfig.tests?.ping?.count || 10;
+                document.getElementById('ping_timeout').value = currentConfig.tests?.ping?.timeout || 2;
+                
+                // Alarmy
+                document.getElementById('alerts_enabled').checked = currentConfig.alerts?.enabled || false;
+                document.getElementById('download_threshold').value = currentConfig.alerts?.download_threshold || 10;
+                document.getElementById('upload_threshold').value = currentConfig.alerts?.upload_threshold || 5;
+                document.getElementById('ping_threshold').value = currentConfig.alerts?.ping_threshold || 50;
+                document.getElementById('packet_loss_threshold').value = currentConfig.alerts?.packet_loss_threshold || 5;
+                
+                // Databáze
+                document.getElementById('auto_cleanup').checked = currentConfig.database?.auto_cleanup || false;
+                document.getElementById('retention_days').value = currentConfig.database?.retention_days || 90;
+                
+                // Ping cíle
+                renderPingTargets();
+            } catch (e) {
+                console.error('Error loading settings:', e);
+            }
+        }
+        
+        // Vykreslení ping cílů
+        function renderPingTargets() {
+            const container = document.getElementById('ping-targets');
+            container.innerHTML = '';
+            
+            if (!currentConfig.ping_targets) {
+                currentConfig.ping_targets = [];
+            }
+            
+            currentConfig.ping_targets.forEach((target, index) => {
+                const targetDiv = document.createElement('div');
+                targetDiv.className = 'ping-target';
+                targetDiv.innerHTML = `
+                    <div class="ping-target-header">
+                        <h4>${target.name}</h4>
+                        <button onclick="removePingTarget(${index})">🗑️ Odstranit</button>
+                    </div>
+                    <div class="form-group">
+                        <label>Název:</label>
+                        <input type="text" value="${target.name}" onchange="updatePingTarget(${index}, 'name', this.value)">
+                    </div>
+                    <div class="form-group">
+                        <label>IP/Host:</label>
+                        <input type="text" value="${target.host}" onchange="updatePingTarget(${index}, 'host', this.value)">
+                    </div>
+                    <div class="form-group">
+                        <label>Povoleno:</label>
+                        <input type="checkbox" ${target.enabled ? 'checked' : ''} onchange="updatePingTarget(${index}, 'enabled', this.checked)">
+                    </div>`;
+                container.appendChild(targetDiv);
+            });
+        }
+        
+        // Přidání ping cíle
+        function addPingTarget() {
+            currentConfig.ping_targets.push({
+                name: 'Nový cíl',
+                host: '8.8.8.8',
+                enabled: true
+            });
+            renderPingTargets();
+        }
+        
+        // Odstranění ping cíle
+        function removePingTarget(index) {
+            currentConfig.ping_targets.splice(index, 1);
+            renderPingTargets();
+        }
+        
+        // Aktualizace ping cíle
+        function updatePingTarget(index, field, value) {
+            currentConfig.ping_targets[index][field] = value;
+        }
+        
+        // Uložení nastavení
+        async function saveSettings() {
+            // Aktualizace konfigurace z formuláře
+            currentConfig.general = currentConfig.general || {};
+            currentConfig.general.test_interval = parseInt(document.getElementById('test_interval').value);
+            currentConfig.general.auto_test_enabled = document.getElementById('auto_test_enabled').checked;
+            
+            currentConfig.tests = currentConfig.tests || {};
+            currentConfig.tests.speed_test_enabled = document.getElementById('speed_test_enabled').checked;
+            currentConfig.tests.speed_test_interval = parseInt(document.getElementById('speed_test_interval').value);
+            currentConfig.tests.ping = currentConfig.tests.ping || {};
+            currentConfig.tests.ping.enabled = document.getElementById('ping_enabled').checked;
+            currentConfig.tests.ping.count = parseInt(document.getElementById('ping_count').value);
+            currentConfig.tests.ping.timeout = parseFloat(document.getElementById('ping_timeout').value);
+            
+            currentConfig.alerts = currentConfig.alerts || {};
+            currentConfig.alerts.enabled = document.getElementById('alerts_enabled').checked;
+            currentConfig.alerts.download_threshold = parseFloat(document.getElementById('download_threshold').value);
+            currentConfig.alerts.upload_threshold = parseFloat(document.getElementById('upload_threshold').value);
+            currentConfig.alerts.ping_threshold = parseInt(document.getElementById('ping_threshold').value);
+            currentConfig.alerts.packet_loss_threshold = parseFloat(document.getElementById('packet_loss_threshold').value);
+            
+            currentConfig.database = currentConfig.database || {};
+            currentConfig.database.auto_cleanup = document.getElementById('auto_cleanup').checked;
+            currentConfig.database.retention_days = parseInt(document.getElementById('retention_days').value);
+            
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(currentConfig)
+                });
+                
+                const result = await response.json();
+                if (result.status === 'success') {
+                    showMessage('success', 'Nastavení bylo úspěšně uloženo!');
+                } else {
+                    showMessage('error', 'Chyba při ukládání nastavení');
+                }
+            } catch (e) {
+                showMessage('error', 'Chyba: ' + e.message);
+            }
+        }
+        
+        // Reset nastavení
+        function resetSettings() {
+            if (confirm('Opravdu chcete obnovit výchozí nastavení?')) {
+                currentConfig = {
+                    general: { test_interval: 5, auto_test_enabled: true },
+                    tests: {
+                        speed_test_enabled: true,
+                        speed_test_interval: 6,
+                        ping: { enabled: true, count: 10, timeout: 2 }
+                    },
+                    ping_targets: [
+                        { name: 'Google DNS', host: '8.8.8.8', enabled: true },
+                        { name: 'Cloudflare DNS', host: '1.1.1.1', enabled: true },
+                        { name: 'Seznam.cz', host: '77.75.74.176', enabled: true }
+                    ],
+                    alerts: {
+                        enabled: false,
+                        download_threshold: 10,
+                        upload_threshold: 5,
+                        ping_threshold: 50,
+                        packet_loss_threshold: 5
+                    },
+                    database: {
+                        auto_cleanup: false,
+                        retention_days: 90
+                    }
+                };
+                loadSettings();
+                showMessage('success', 'Nastavení bylo obnoveno na výchozí hodnoty');
+            }
+        }
+        
+        // Vyčištění databáze
+        async function cleanupDatabase() {
+            if (confirm('Opravdu chcete vyčistit staré záznamy z databáze?')) {
+                try {
+                    const response = await fetch('/api/cleanup', { method: 'POST' });
+                    const result = await response.json();
+                    if (result.status === 'success') {
+                        showMessage('success', result.message);
+                    } else {
+                        showMessage('error', result.message || 'Chyba při čištění databáze');
+                    }
+                } catch (e) {
+                    showMessage('error', 'Chyba: ' + e.message);
+                }
+            }
+        }
+        
+        // Export dat
+        function exportData(format) {
+            window.location.href = `/api/export/${format}`;
+        }
+        
+        // Spuštění testu
+        async function runTest() {
+            const button = event.target;
+            button.disabled = true;
+            button.textContent = '⏳ Test běží...';
+            
+            try {
+                const response = await fetch('/api/test');
+                const result = await response.json();
+                
+                setTimeout(() => {
+                    loadStatus();
+                    button.disabled = false;
+                    button.textContent = '🚀 Spustit test nyní';
+                }, 2000);
+            } catch (e) {
+                console.error('Error running test:', e);
+                button.disabled = false;
+                button.textContent = '🚀 Spustit test nyní';
+            }
+        }
+        
+        // Zobrazení zprávy
+        function showMessage(type, message) {
+            const element = document.getElementById(`${type}-message`);
+            element.textContent = message;
+            element.style.display = 'block';
+            setTimeout(() => {
+                element.style.display = 'none';
+            }, 5000);
+        }
+        
+        // Inicializace při načtení
+        document.addEventListener('DOMContentLoaded', function() {
+            loadStatus();
+            
+            // Automatická aktualizace každých 30 sekund
+            setInterval(loadStatus, 30000);
+        });
+    </script>
+</body>
+</html>
