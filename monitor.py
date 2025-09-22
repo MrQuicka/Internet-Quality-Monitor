@@ -1,34 +1,4 @@
-@app.route('/')
-def dashboard():
-    """Jednoduché webové rozhraní"""
-    # Načteme HTML z externího souboru nebo použijeme embedded verzi
-    html_path = '/app/dashboard.html'
-    if os.path.exists(html_path):
-        with open(html_path, 'r', encoding='utf-8') as f:
-            return f.read()
-    else:
-        # Zde by byl celý HTML kód z artifaktu settings-page-html
-        # Pro zkrácení používám placeholder
-        return """
-        <!DOCTYPE html>
-        <html>
-        <head><title>Internet Monitor</title></head>
-        <body>
-            <h1>Internet Monitor</h1>
-            <p>Pro plné rozhraní zkopírujte dashboard.html do /app/</p>
-            <a href="/api/status">API Status</a>
-        </body>
-        </html>
-        """
-
-def run_scheduler():
-    """Běh plánovače v samostatném vlákně"""
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
-
-def run_flask():
-    """#!/usr/bin/env python3
+#!/usr/bin/env python3
 import os
 import time
 import schedule
@@ -112,9 +82,9 @@ class InternetMetric(Base):
     
     id = Column(Integer, primary_key=True)
     timestamp = Column(DateTime, default=datetime.utcnow)
-    ping_google = Column(Float)
-    ping_cloudflare = Column(Float)
-    ping_seznam = Column(Float)
+    ping_google_dns = Column(Float)
+    ping_cloudflare_dns = Column(Float)
+    ping_seznam_cz = Column(Float)
     download_speed = Column(Float)  # Mbps
     upload_speed = Column(Float)    # Mbps
     packet_loss = Column(Float)     # procenta
@@ -131,7 +101,6 @@ class NetworkMonitor:
         self.load_ping_targets()
         self.create_tables()
         
-    def load_ping_targets(self):
     def load_ping_targets(self):
         """Načtení ping cílů z konfigurace"""
         self.test_hosts = {}
@@ -202,8 +171,8 @@ class NetworkMonitor:
             isp_info = st.results.client
             
             return {
-                'download': round(download, 2),
-                'upload': round(upload, 2),
+                'download_speed': round(download, 2),
+                'upload_speed': round(upload, 2),
                 'server_location': f"{server['name']}, {server['country']}",
                 'isp_name': isp_info.get('isp', 'Unknown')
             }
@@ -230,12 +199,12 @@ class NetworkMonitor:
             for name, host in self.test_hosts.items():
                 ping, jitter, loss = self.measure_ping(host)
                 if ping is not None:
-                    ping_results[f'ping_{name}'] = round(ping, 2)
+                    # Uložení do správného sloupce v databázi
+                    column_name = f'ping_{name}'
+                    metrics[column_name] = round(ping, 2)
                     jitters.append(jitter)
                     packet_losses.append(loss)
                     metrics['is_online'] = True
-            
-            metrics.update(ping_results)
             
             if jitters:
                 metrics['jitter'] = round(statistics.mean(jitters), 2)
@@ -263,9 +232,9 @@ class NetworkMonitor:
         # Kontrola prahových hodnot pro alarmy
         self.check_alerts(metrics)
         
-        logger.info(f"Test dokončen: Download: {metrics.get('download', 'N/A')} Mbps, "
-                   f"Upload: {metrics.get('upload', 'N/A')} Mbps, "
-                   f"Ping: {metrics.get('ping_google_dns', metrics.get('ping_google', 'N/A'))} ms")
+        logger.info(f"Test dokončen: Download: {metrics.get('download_speed', 'N/A')} Mbps, "
+                   f"Upload: {metrics.get('upload_speed', 'N/A')} Mbps, "
+                   f"Ping: {metrics.get('ping_google_dns', 'N/A')} ms")
         
         return metrics
     
@@ -278,12 +247,12 @@ class NetworkMonitor:
         alert_messages = []
         
         # Kontrola rychlosti downloadu
-        if metrics.get('download') and metrics['download'] < alerts.get('download_threshold', 10):
-            alert_messages.append(f"Nízká rychlost downloadu: {metrics['download']} Mbps")
+        if metrics.get('download_speed') and metrics['download_speed'] < alerts.get('download_threshold', 10):
+            alert_messages.append(f"Nízká rychlost downloadu: {metrics['download_speed']} Mbps")
         
         # Kontrola rychlosti uploadu
-        if metrics.get('upload') and metrics['upload'] < alerts.get('upload_threshold', 5):
-            alert_messages.append(f"Nízká rychlost uploadu: {metrics['upload']} Mbps")
+        if metrics.get('upload_speed') and metrics['upload_speed'] < alerts.get('upload_threshold', 5):
+            alert_messages.append(f"Nízká rychlost uploadu: {metrics['upload_speed']} Mbps")
         
         # Kontrola pingu
         for key, value in metrics.items():
@@ -301,7 +270,13 @@ class NetworkMonitor:
         """Uložení metrik do databáze"""
         session = Session()
         try:
-            metric = InternetMetric(**metrics)
+            # Filtrování pouze existujících sloupců
+            valid_metrics = {}
+            for key, value in metrics.items():
+                if hasattr(InternetMetric, key):
+                    valid_metrics[key] = value
+            
+            metric = InternetMetric(**valid_metrics)
             session.add(metric)
             session.commit()
             logger.info("Metriky úspěšně uloženy do databáze")
@@ -311,8 +286,8 @@ class NetworkMonitor:
         finally:
             session.close()
 
-# Globální instance monitoru
-monitor = NetworkMonitor()
+# Globální instance monitoru - bude inicializována v main
+monitor = None
 
 # Flask routes
 @app.route('/api/status')
@@ -330,12 +305,15 @@ def get_status():
                     if value is not None:
                         ping_data[attr] = value
             
+            # Získání první ping hodnoty pro hlavní zobrazení
+            main_ping = latest.ping_google_dns or latest.ping_cloudflare_dns or next(iter(ping_data.values()), None) if ping_data else None
+            
             return jsonify({
                 'online': latest.is_online,
                 'timestamp': latest.timestamp.isoformat(),
                 'download': latest.download_speed,
                 'upload': latest.upload_speed,
-                'ping': latest.ping_google_dns or latest.ping_google or next(iter(ping_data.values()), None),
+                'ping': main_ping,
                 'ping_data': ping_data,
                 'packet_loss': latest.packet_loss,
                 'jitter': latest.jitter,
@@ -360,13 +338,14 @@ def handle_config():
         save_config(CONFIG)
         
         # Reload ping targets
-        monitor.config = CONFIG
-        monitor.load_ping_targets()
+        if monitor:
+            monitor.config = CONFIG
+            monitor.load_ping_targets()
         
         # Přeplánování testů s novým intervalem
         schedule.clear()
         test_interval = CONFIG.get('general', {}).get('test_interval', 5)
-        if CONFIG.get('general', {}).get('auto_test_enabled', True):
+        if CONFIG.get('general', {}).get('auto_test_enabled', True) and monitor:
             schedule.every(test_interval).minutes.do(monitor.run_test)
             logger.info(f"Testy přeplánovány na interval {test_interval} minut")
         
@@ -467,8 +446,6 @@ def get_history(period):
     """Získání historie (hour, day, week, month)"""
     session = Session()
     try:
-        from datetime import timedelta
-        
         periods = {
             'hour': timedelta(hours=1),
             'day': timedelta(days=1),
@@ -486,11 +463,14 @@ def get_history(period):
         
         data = []
         for m in metrics:
+            # Získání první dostupné ping hodnoty
+            ping_value = m.ping_google_dns or m.ping_cloudflare_dns or m.ping_seznam_cz
+            
             data.append({
                 'timestamp': m.timestamp.isoformat(),
                 'download': m.download_speed,
                 'upload': m.upload_speed,
-                'ping': m.ping_google,
+                'ping': ping_value,
                 'packet_loss': m.packet_loss,
                 'jitter': m.jitter,
                 'online': m.is_online
@@ -505,7 +485,6 @@ def get_statistics():
     """Získání statistik"""
     session = Session()
     try:
-        from datetime import timedelta
         from sqlalchemy import func
         
         # Statistiky za posledních 24 hodin
@@ -518,7 +497,7 @@ def get_statistics():
             func.avg(InternetMetric.upload_speed).label('avg_upload'),
             func.min(InternetMetric.upload_speed).label('min_upload'),
             func.max(InternetMetric.upload_speed).label('max_upload'),
-            func.avg(InternetMetric.ping_google).label('avg_ping'),
+            func.avg(InternetMetric.ping_google_dns).label('avg_ping'),
             func.avg(InternetMetric.packet_loss).label('avg_packet_loss'),
             func.count(InternetMetric.id).label('total_tests'),
             func.sum(InternetMetric.is_online).label('online_tests')
@@ -548,239 +527,249 @@ def get_statistics():
 @app.route('/api/test')
 def trigger_test():
     """Manuální spuštění testu"""
-    result = monitor.run_test()
-    return jsonify(result)
+    if monitor:
+        result = monitor.run_test()
+        return jsonify(result)
+    else:
+        return jsonify({'error': 'Monitor není inicializován'}), 500
 
 @app.route('/')
 def dashboard():
     """Jednoduché webové rozhraní"""
-    return render_template_string('''
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Internet Monitor</title>
-        <style>
-            body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
-            .container { max-width: 1200px; margin: 0 auto; }
-            .card { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-            .status { display: flex; justify-content: space-between; flex-wrap: wrap; }
-            .metric { flex: 1; min-width: 150px; margin: 10px; text-align: center; }
-            .metric .value { font-size: 2em; font-weight: bold; color: #333; }
-            .metric .label { color: #666; margin-top: 5px; }
-            .online { color: #4CAF50; }
-            .offline { color: #f44336; }
-            button { background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
-            button:hover { background: #1976D2; }
-            #chart { height: 400px; margin-top: 20px; }
-        </style>
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Monitor kvality internetového připojení</h1>
-            
-            <div class="card">
-                <h2>Aktuální stav</h2>
-                <div id="currentStatus" class="status">
-                    <div class="metric">
-                        <div class="value">--</div>
-                        <div class="label">Status</div>
-                    </div>
-                    <div class="metric">
-                        <div class="value">-- Mbps</div>
-                        <div class="label">Download</div>
-                    </div>
-                    <div class="metric">
-                        <div class="value">-- Mbps</div>
-                        <div class="label">Upload</div>
-                    </div>
-                    <div class="metric">
-                        <div class="value">-- ms</div>
-                        <div class="label">Ping</div>
-                    </div>
-                    <div class="metric">
-                        <div class="value">-- %</div>
-                        <div class="label">Packet Loss</div>
-                    </div>
-                </div>
-                <button onclick="runTest()">Spustit test nyní</button>
-            </div>
-            
-            <div class="card">
-                <h2>Historie (posledních 24 hodin)</h2>
-                <canvas id="chart"></canvas>
-            </div>
-            
-            <div class="card">
-                <h2>Statistiky (24h)</h2>
-                <div id="statistics" class="status"></div>
-            </div>
-        </div>
-        
-        <script>
-            let chart = null;
-            
-            async function loadStatus() {
-                try {
-                    const response = await fetch('/api/status');
-                    const data = await response.json();
-                    
-                    const statusDiv = document.getElementById('currentStatus');
-                    statusDiv.innerHTML = `
+    # Načteme HTML z externího souboru nebo použijeme embedded verzi
+    html_path = '/app/dashboard.html'
+    if os.path.exists(html_path):
+        with open(html_path, 'r', encoding='utf-8') as f:
+            return f.read()
+    else:
+        # Základní HTML pokud není k dispozici dashboard.html
+        return render_template_string('''
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Internet Monitor</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; background: #f0f0f0; }
+                .container { max-width: 1200px; margin: 0 auto; }
+                .card { background: white; padding: 20px; margin: 10px 0; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+                .status { display: flex; justify-content: space-between; flex-wrap: wrap; }
+                .metric { flex: 1; min-width: 150px; margin: 10px; text-align: center; }
+                .metric .value { font-size: 2em; font-weight: bold; color: #333; }
+                .metric .label { color: #666; margin-top: 5px; }
+                .online { color: #4CAF50; }
+                .offline { color: #f44336; }
+                button { background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; }
+                button:hover { background: #1976D2; }
+                #chart { height: 400px; margin-top: 20px; }
+            </style>
+            <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        </head>
+        <body>
+            <div class="container">
+                <h1>Monitor kvality internetového připojení</h1>
+                
+                <div class="card">
+                    <h2>Aktuální stav</h2>
+                    <div id="currentStatus" class="status">
                         <div class="metric">
-                            <div class="value ${data.online ? 'online' : 'offline'}">${data.online ? 'Online' : 'Offline'}</div>
+                            <div class="value">--</div>
                             <div class="label">Status</div>
                         </div>
                         <div class="metric">
-                            <div class="value">${data.download || '--'} Mbps</div>
+                            <div class="value">-- Mbps</div>
                             <div class="label">Download</div>
                         </div>
                         <div class="metric">
-                            <div class="value">${data.upload || '--'} Mbps</div>
+                            <div class="value">-- Mbps</div>
                             <div class="label">Upload</div>
                         </div>
                         <div class="metric">
-                            <div class="value">${data.ping || '--'} ms</div>
+                            <div class="value">-- ms</div>
                             <div class="label">Ping</div>
                         </div>
                         <div class="metric">
-                            <div class="value">${data.packet_loss || '--'} %</div>
+                            <div class="value">-- %</div>
                             <div class="label">Packet Loss</div>
                         </div>
-                    `;
-                } catch (e) {
-                    console.error('Error loading status:', e);
-                }
-            }
+                    </div>
+                    <button onclick="runTest()">Spustit test nyní</button>
+                </div>
+                
+                <div class="card">
+                    <h2>Historie (posledních 24 hodin)</h2>
+                    <canvas id="chart"></canvas>
+                </div>
+                
+                <div class="card">
+                    <h2>Statistiky (24h)</h2>
+                    <div id="statistics" class="status"></div>
+                </div>
+            </div>
             
-            async function loadHistory() {
-                try {
-                    const response = await fetch('/api/history/day');
-                    const data = await response.json();
-                    
-                    const ctx = document.getElementById('chart').getContext('2d');
-                    
-                    if (chart) {
-                        chart.destroy();
+            <script>
+                let chart = null;
+                
+                async function loadStatus() {
+                    try {
+                        const response = await fetch('/api/status');
+                        const data = await response.json();
+                        
+                        const statusDiv = document.getElementById('currentStatus');
+                        statusDiv.innerHTML = `
+                            <div class="metric">
+                                <div class="value ${data.online ? 'online' : 'offline'}">${data.online ? 'Online' : 'Offline'}</div>
+                                <div class="label">Status</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.download || '--'} Mbps</div>
+                                <div class="label">Download</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.upload || '--'} Mbps</div>
+                                <div class="label">Upload</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.ping ? data.ping.toFixed(1) : '--'} ms</div>
+                                <div class="label">Ping</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.packet_loss || '0'} %</div>
+                                <div class="label">Packet Loss</div>
+                            </div>
+                        `;
+                    } catch (e) {
+                        console.error('Error loading status:', e);
                     }
-                    
-                    chart = new Chart(ctx, {
-                        type: 'line',
-                        data: {
-                            labels: data.map(d => new Date(d.timestamp).toLocaleTimeString()),
-                            datasets: [{
-                                label: 'Download (Mbps)',
-                                data: data.map(d => d.download),
-                                borderColor: 'rgb(75, 192, 192)',
-                                tension: 0.1
-                            }, {
-                                label: 'Upload (Mbps)',
-                                data: data.map(d => d.upload),
-                                borderColor: 'rgb(255, 99, 132)',
-                                tension: 0.1
-                            }, {
-                                label: 'Ping (ms)',
-                                data: data.map(d => d.ping),
-                                borderColor: 'rgb(54, 162, 235)',
-                                tension: 0.1,
-                                yAxisID: 'y1'
-                            }]
-                        },
-                        options: {
-                            responsive: true,
-                            maintainAspectRatio: false,
-                            scales: {
-                                y: {
-                                    type: 'linear',
-                                    display: true,
-                                    position: 'left',
-                                    title: {
+                }
+                
+                async function loadHistory() {
+                    try {
+                        const response = await fetch('/api/history/day');
+                        const data = await response.json();
+                        
+                        const ctx = document.getElementById('chart').getContext('2d');
+                        
+                        if (chart) {
+                            chart.destroy();
+                        }
+                        
+                        chart = new Chart(ctx, {
+                            type: 'line',
+                            data: {
+                                labels: data.map(d => new Date(d.timestamp).toLocaleTimeString()),
+                                datasets: [{
+                                    label: 'Download (Mbps)',
+                                    data: data.map(d => d.download),
+                                    borderColor: 'rgb(75, 192, 192)',
+                                    tension: 0.1
+                                }, {
+                                    label: 'Upload (Mbps)',
+                                    data: data.map(d => d.upload),
+                                    borderColor: 'rgb(255, 99, 132)',
+                                    tension: 0.1
+                                }, {
+                                    label: 'Ping (ms)',
+                                    data: data.map(d => d.ping),
+                                    borderColor: 'rgb(54, 162, 235)',
+                                    tension: 0.1,
+                                    yAxisID: 'y1'
+                                }]
+                            },
+                            options: {
+                                responsive: true,
+                                maintainAspectRatio: false,
+                                scales: {
+                                    y: {
+                                        type: 'linear',
                                         display: true,
-                                        text: 'Rychlost (Mbps)'
-                                    }
-                                },
-                                y1: {
-                                    type: 'linear',
-                                    display: true,
-                                    position: 'right',
-                                    title: {
-                                        display: true,
-                                        text: 'Ping (ms)'
+                                        position: 'left',
+                                        title: {
+                                            display: true,
+                                            text: 'Rychlost (Mbps)'
+                                        }
                                     },
-                                    grid: {
-                                        drawOnChartArea: false
+                                    y1: {
+                                        type: 'linear',
+                                        display: true,
+                                        position: 'right',
+                                        title: {
+                                            display: true,
+                                            text: 'Ping (ms)'
+                                        },
+                                        grid: {
+                                            drawOnChartArea: false
+                                        }
                                     }
                                 }
                             }
-                        }
-                    });
-                } catch (e) {
-                    console.error('Error loading history:', e);
+                        });
+                    } catch (e) {
+                        console.error('Error loading history:', e);
+                    }
                 }
-            }
-            
-            async function loadStatistics() {
-                try {
-                    const response = await fetch('/api/statistics');
-                    const data = await response.json();
-                    
-                    const statsDiv = document.getElementById('statistics');
-                    statsDiv.innerHTML = `
-                        <div class="metric">
-                            <div class="value">${data.uptime}%</div>
-                            <div class="label">Uptime</div>
-                        </div>
-                        <div class="metric">
-                            <div class="value">${data.download.avg} Mbps</div>
-                            <div class="label">Průměr Download</div>
-                        </div>
-                        <div class="metric">
-                            <div class="value">${data.upload.avg} Mbps</div>
-                            <div class="label">Průměr Upload</div>
-                        </div>
-                        <div class="metric">
-                            <div class="value">${data.ping} ms</div>
-                            <div class="label">Průměr Ping</div>
-                        </div>
-                        <div class="metric">
-                            <div class="value">${data.total_tests}</div>
-                            <div class="label">Počet testů</div>
-                        </div>
-                    `;
-                } catch (e) {
-                    console.error('Error loading statistics:', e);
+                
+                async function loadStatistics() {
+                    try {
+                        const response = await fetch('/api/statistics');
+                        const data = await response.json();
+                        
+                        const statsDiv = document.getElementById('statistics');
+                        statsDiv.innerHTML = `
+                            <div class="metric">
+                                <div class="value">${data.uptime}%</div>
+                                <div class="label">Uptime</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.download.avg} Mbps</div>
+                                <div class="label">Průměr Download</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.upload.avg} Mbps</div>
+                                <div class="label">Průměr Upload</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.ping} ms</div>
+                                <div class="label">Průměr Ping</div>
+                            </div>
+                            <div class="metric">
+                                <div class="value">${data.total_tests}</div>
+                                <div class="label">Počet testů</div>
+                            </div>
+                        `;
+                    } catch (e) {
+                        console.error('Error loading statistics:', e);
+                    }
                 }
-            }
-            
-            async function runTest() {
-                alert('Test byl spuštěn. Může trvat až minutu...');
-                try {
-                    await fetch('/api/test');
-                    setTimeout(() => {
-                        loadStatus();
-                        loadHistory();
-                        loadStatistics();
-                    }, 2000);
-                } catch (e) {
-                    console.error('Error running test:', e);
+                
+                async function runTest() {
+                    alert('Test byl spuštěn. Může trvat až minutu...');
+                    try {
+                        await fetch('/api/test');
+                        setTimeout(() => {
+                            loadStatus();
+                            loadHistory();
+                            loadStatistics();
+                        }, 2000);
+                    } catch (e) {
+                        console.error('Error running test:', e);
+                    }
                 }
-            }
-            
-            // Načtení dat při startu
-            loadStatus();
-            loadHistory();
-            loadStatistics();
-            
-            // Aktualizace každých 30 sekund
-            setInterval(() => {
+                
+                // Načtení dat při startu
                 loadStatus();
                 loadHistory();
                 loadStatistics();
-            }, 30000);
-        </script>
-    </body>
-    </html>
-    ''')
+                
+                // Aktualizace každých 30 sekund
+                setInterval(() => {
+                    loadStatus();
+                    loadHistory();
+                    loadStatistics();
+                }, 30000);
+            </script>
+        </body>
+        </html>
+        ''')
 
 def run_scheduler():
     """Běh plánovače v samostatném vlákně"""
@@ -798,7 +787,7 @@ def setup_scheduler():
     """Nastavení plánovače podle konfigurace"""
     schedule.clear()
     
-    if CONFIG.get('general', {}).get('auto_test_enabled', True):
+    if CONFIG.get('general', {}).get('auto_test_enabled', True) and monitor:
         test_interval = CONFIG.get('general', {}).get('test_interval', 5)
         schedule.every(test_interval).minutes.do(monitor.run_test)
         logger.info(f"Automatické testy naplánovány každých {test_interval} minut")
@@ -838,7 +827,10 @@ if __name__ == '__main__':
     # První test
     if CONFIG.get('general', {}).get('auto_test_enabled', True):
         logger.info("Spouštím počáteční test...")
-        monitor.run_test()
+        try:
+            monitor.run_test()
+        except Exception as e:
+            logger.error(f"Chyba při počátečním testu: {e}")
     
     # Nastavení plánovače
     setup_scheduler()
