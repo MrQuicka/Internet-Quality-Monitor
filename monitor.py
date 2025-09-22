@@ -541,8 +541,7 @@ def dashboard():
     if os.path.exists(html_path):
         with open(html_path, 'r', encoding='utf-8') as f:
             return f.read()
-    else:
-        # Základní HTML pokud není k dispozici dashboard.html
+    else:        
         return render_template_string('''
         <!DOCTYPE html>
         <html>
