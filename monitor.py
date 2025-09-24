@@ -357,60 +357,46 @@ class NetworkMonitor:
 monitor = None
 
 # ===== Flask routes =====
-@app.route('/api/status')
-def get_status():
-    """Získání aktuálního stavu (poslední záznam) – legacy struktura."""
-    session = Session()
-    try:
-        latest = session.query(InternetMetric).order_by(desc(InternetMetric.timestamp)).first()
-        if latest:
-            # Dynamické získání všech ping hodnot
-            ping_data = {}
-            for c in InternetMetric.__table__.columns:
-                if c.name.startswith('ping_'):
-                    value = getattr(latest, c.name)
-                    if value is not None:
-                        ping_data[c.name] = value
-            
-            # Získání první ping hodnoty pro hlavní zobrazení
-            main_ping = _pick_main_ping_model(latest)
-            
-            return jsonify({
-                'online': latest.is_online,
-                'timestamp': latest.timestamp.isoformat(),
-                'download': latest.download_speed,
-                'upload': latest.upload_speed,
-                'ping': main_ping,
-                'ping_data': ping_data,
-                'packet_loss': latest.packet_loss,
-                'jitter': latest.jitter,
-                'isp': latest.isp_name,
-                'external_ip': latest.external_ip
-            })
-        return jsonify({'error': 'Žádná data k dispozici'}), 404
-    finally:
-        session.close()
-
 @app.route('/api/latest')
 def api_latest():
-    """Jednoduchý endpoint pro FE: vrátí poslední záznam v jednotném formátu."""
+    """Get latest measurement in consistent format"""
     session = Session()
     try:
         m = session.query(InternetMetric).order_by(desc(InternetMetric.timestamp)).first()
         if not m:
             return ('', 204)
-        return jsonify(to_front_from_model(m))
+        
+        # Get main ping value
+        ping_value = None
+        if m.ping_google_dns is not None:
+            ping_value = float(m.ping_google_dns)
+        elif m.ping_cloudflare_dns is not None:
+            ping_value = float(m.ping_cloudflare_dns)
+        elif m.ping_seznam_cz is not None:
+            ping_value = float(m.ping_seznam_cz)
+        
+        return jsonify({
+            'ts': m.timestamp.isoformat() if m.timestamp else None,
+            'ping_ms': ping_value,
+            'jitter_ms': float(m.jitter) if m.jitter is not None else None,
+            'download_mbps': float(m.download_speed) if m.download_speed is not None else None,
+            'upload_mbps': float(m.upload_speed) if m.upload_speed is not None else None,
+            'packet_loss': float(m.packet_loss) if m.packet_loss is not None else None,
+            'online': bool(m.is_online) if m.is_online is not None else None,
+            'isp': m.isp_name,
+            'external_ip': m.external_ip
+        })
     finally:
         session.close()
 
 @app.route('/api/history')
 def api_history():
+    """Unified history endpoint that returns data in consistent format"""
     session = Session()
     try:
         period = request.args.get('period')
-        limit = request.args.get('limit', type=int) or 720
-
-        q = session.query(InternetMetric)
+        limit = request.args.get('limit', type=int) or 288  # 24h při 5min intervalech
+        
         if period:
             periods = {
                 'hour': timedelta(hours=1),
@@ -419,22 +405,46 @@ def api_history():
                 'month': timedelta(days=30)
             }
             if period not in periods:
-                return jsonify({'error': 'Neplatná perioda'}), 400
+                return jsonify({'error': 'Invalid period'}), 400
+            
             since = datetime.utcnow() - periods[period]
-
             rows = (session.query(InternetMetric)
-                    .filter(InternetMetric.timestamp >= since)
-                    .order_by(InternetMetric.timestamp.asc())
-                    .all())
+                   .filter(InternetMetric.timestamp >= since)
+                   .order_by(InternetMetric.timestamp.asc())
+                   .all())
         else:
-            # posledních N záznamů, vezmeme sestupně a v Pythonu otočíme
+            # Last N records
             rows_desc = (session.query(InternetMetric)
-                         .order_by(InternetMetric.timestamp.desc())
-                         .limit(limit)
-                         .all())
+                        .order_by(InternetMetric.timestamp.desc())
+                        .limit(limit)
+                        .all())
             rows = list(reversed(rows_desc))
-
-        data = [to_front_from_model(m) for m in rows]
+        
+        data = []
+        for m in rows:
+            # Get main ping value
+            ping_value = None
+            if m.ping_google_dns is not None:
+                ping_value = float(m.ping_google_dns)
+            elif m.ping_cloudflare_dns is not None:
+                ping_value = float(m.ping_cloudflare_dns)
+            elif m.ping_seznam_cz is not None:
+                ping_value = float(m.ping_seznam_cz)
+            
+            data.append({
+                'ts': m.timestamp.isoformat() if m.timestamp else None,
+                'timestamp': m.timestamp.isoformat() if m.timestamp else None,
+                'ping_ms': ping_value,
+                'ping': ping_value,  # For compatibility
+                'jitter_ms': float(m.jitter) if m.jitter is not None else None,
+                'download_mbps': float(m.download_speed) if m.download_speed is not None else None,
+                'download': float(m.download_speed) if m.download_speed is not None else None,
+                'upload_mbps': float(m.upload_speed) if m.upload_speed is not None else None,
+                'upload': float(m.upload_speed) if m.upload_speed is not None else None,
+                'packet_loss': float(m.packet_loss) if m.packet_loss is not None else None,
+                'online': bool(m.is_online) if m.is_online is not None else None
+            })
+        
         return jsonify(data)
     finally:
         session.close()
@@ -645,12 +655,33 @@ def trigger_test():
 
 @app.route('/api/run', methods=['POST'])
 def api_run():
-    """Nový ruční endpoint používaný dashboardem. Spouští i speedtest hned."""
-    if monitor:
-        result = monitor.run_test(force_speed=True)
-        return jsonify(to_front_from_metrics(result))
-    else:
-        return jsonify({'error': 'Monitor není inicializován'}), 500
+    """Run manual test with progress simulation"""
+    if not monitor:
+        return jsonify({'error': 'Monitor not initialized'}), 500
+    
+    # Run test (force speed test for manual runs)
+    result = monitor.run_test(force_speed=True)
+    
+    # Get main ping value
+    ping_value = None
+    if result.get('ping_google_dns') is not None:
+        ping_value = float(result['ping_google_dns'])
+    elif result.get('ping_cloudflare_dns') is not None:
+        ping_value = float(result['ping_cloudflare_dns'])
+    elif result.get('ping_seznam_cz') is not None:
+        ping_value = float(result['ping_seznam_cz'])
+    
+    return jsonify({
+        'ts': result.get('timestamp').isoformat() if result.get('timestamp') else datetime.utcnow().isoformat(),
+        'ping_ms': ping_value,
+        'jitter_ms': result.get('jitter'),
+        'download_mbps': result.get('download_speed'),
+        'upload_mbps': result.get('upload_speed'),
+        'packet_loss': result.get('packet_loss'),
+        'online': result.get('is_online'),
+        'isp': result.get('isp_name'),
+        'external_ip': result.get('external_ip')
+    })
 
 @app.route('/')
 def dashboard():

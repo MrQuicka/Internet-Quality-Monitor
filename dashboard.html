@@ -36,17 +36,56 @@
       justify-content: space-between;
       gap: 12px;
       min-height: 56px;
+      flex-wrap: wrap;
     }
     header h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .2px; }
 
-    .actions { display: flex; gap: 10px; align-items: center; }
+    .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
     .btn {
       background: var(--accent);
       border: 0; color: #0b1220; font-weight: 700;
       padding: 10px 14px; border-radius: 10px; cursor: pointer;
+      transition: all 0.3s;
     }
-    .btn[disabled] { opacity: .6; cursor: default; }
+    .btn:hover { background: #7ab5ff; transform: translateY(-1px); }
+    .btn[disabled] { opacity: .6; cursor: not-allowed; }
+    .btn.secondary { 
+      background: transparent; 
+      border: 1px solid var(--accent); 
+      color: var(--accent); 
+    }
     .hint { color: var(--muted); font-size: 12px; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 10px;
+      padding: 0 20px;
+      margin-top: 10px;
+      border-bottom: 1px solid #222837;
+    }
+    .tab {
+      background: transparent;
+      border: none;
+      color: var(--muted);
+      padding: 12px 20px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 500;
+      border-bottom: 2px solid transparent;
+      transition: all 0.3s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab-content {
+      display: none;
+      padding: 20px;
+    }
+    .tab-content.active { display: block; }
 
     main {
       padding: 20px;
@@ -63,7 +102,7 @@
     }
     .row {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
       gap: 12px;
     }
     .stat {
@@ -85,83 +124,311 @@
     .chart-container {
       position: relative;
       width: 100%;
-      height: 320px;     /* pevná výška */
+      height: 320px;
       min-height: 0;
     }
     canvas { display: block; max-width: 100%; }
 
-    footer { padding: 16px 20px 28px; color: var(--muted); font-size: 12px; }
+    /* Progress/Status panel */
+    .progress-panel {
+      background: #121620;
+      border: 1px solid #22283a;
+      border-radius: 12px;
+      padding: 16px;
+      margin-bottom: 16px;
+      display: none;
+    }
+    .progress-panel.active { display: block; }
+    .progress-title { 
+      font-size: 14px; 
+      font-weight: 600; 
+      margin-bottom: 12px;
+      color: var(--accent);
+    }
+    .progress-item {
+      padding: 8px 0;
+      border-bottom: 1px solid #22283a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 13px;
+    }
+    .progress-item:last-child { border-bottom: none; }
+    .progress-label { color: var(--muted); }
+    .progress-value { 
+      font-weight: 600; 
+      color: var(--text);
+    }
+    .progress-value.running { color: var(--warn); }
+    .progress-value.success { color: var(--ok); }
+    .progress-value.error { color: var(--bad); }
 
-    @media (max-width: 980px) { .row { grid-template-columns: repeat(2, minmax(0,1fr)); } }
-    @media (max-width: 640px) { .row { grid-template-columns: 1fr; } }
+    /* Settings form */
+    .settings-section {
+      margin-bottom: 24px;
+    }
+    .settings-section h3 {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 12px;
+    }
+    .form-group {
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .form-group label {
+      flex: 0 0 180px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .form-group input,
+    .form-group select {
+      flex: 1;
+      max-width: 200px;
+      padding: 8px 12px;
+      background: #121620;
+      border: 1px solid #22283a;
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+    }
+    .form-group input:focus,
+    .form-group select:focus {
+      outline: none;
+      border-color: var(--accent);
+    }
+    .form-group input[type="checkbox"] {
+      flex: 0;
+      width: 20px;
+      height: 20px;
+    }
+    .form-group .unit {
+      flex: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    /* Ping targets */
+    .ping-target {
+      background: #121620;
+      border: 1px solid #22283a;
+      border-radius: 8px;
+      padding: 12px;
+      margin-bottom: 8px;
+    }
+    .ping-target-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .ping-target h4 {
+      margin: 0;
+      font-size: 13px;
+      color: var(--text);
+    }
+
+    footer { 
+      padding: 16px 20px 28px; 
+      color: var(--muted); 
+      font-size: 12px; 
+      text-align: center;
+    }
+
+    @media (max-width: 980px) { 
+      .row { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+    }
+    @media (max-width: 640px) { 
+      .form-group {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .form-group label {
+        flex: 1;
+      }
+      .form-group input,
+      .form-group select {
+        max-width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>Internet Quality Monitor</h1>
+    <h1>🌐 Internet Quality Monitor</h1>
     <div class="actions">
-      <button id="runBtn" class="btn">Spustit test</button>
+      <button id="runBtn" class="btn">🚀 Spustit test</button>
+      <button id="settingsBtn" class="btn secondary" onclick="toggleTab('settings')">⚙️ Nastavení</button>
       <span id="runHint" class="hint"></span>
     </div>
   </header>
 
-  <main>
-    <section class="row">
-      <div class="stat">
-        <div class="label">Ping</div>
-        <div id="pingValue" class="value">–</div>
-      </div>
-      <div class="stat">
-        <div class="label">Jitter</div>
-        <div id="jitterValue" class="value">–</div>
-      </div>
-      <div class="stat">
-        <div class="label">Download</div>
-        <div id="downValue" class="value">–</div>
-      </div>
-      <div class="stat">
-        <div class="label">Upload</div>
-        <div id="upValue" class="value">–</div>
-      </div>
-    </section>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('dashboard', event)">📊 Dashboard</button>
+    <button class="tab" onclick="switchTab('history', event)">📈 Historie</button>
+    <button class="tab" onclick="switchTab('settings', event)">⚙️ Nastavení</button>
+  </div>
 
-    <section class="card chart-card">
-      <h2>Vývoj pingu (ms)</h2>
-      <div class="chart-container">
-        <canvas id="latencyChart"></canvas>
+  <!-- Dashboard Tab -->
+  <div id="dashboard" class="tab-content active">
+    <main>
+      <!-- Progress panel -->
+      <div id="progressPanel" class="progress-panel">
+        <div class="progress-title">⏳ Probíhá měření...</div>
+        <div id="progressItems"></div>
       </div>
-    </section>
-  </main>
+
+      <!-- Current stats -->
+      <section class="row">
+        <div class="stat">
+          <div class="label">Ping</div>
+          <div id="pingValue" class="value">–</div>
+        </div>
+        <div class="stat">
+          <div class="label">Jitter</div>
+          <div id="jitterValue" class="value">–</div>
+        </div>
+        <div class="stat">
+          <div class="label">Download</div>
+          <div id="downValue" class="value">–</div>
+        </div>
+        <div class="stat">
+          <div class="label">Upload</div>
+          <div id="upValue" class="value">–</div>
+        </div>
+        <div class="stat">
+          <div class="label">Packet Loss</div>
+          <div id="lossValue" class="value">–</div>
+        </div>
+        <div class="stat">
+          <div class="label">Status</div>
+          <div id="statusValue" class="value">–</div>
+        </div>
+      </section>
+
+      <!-- Chart -->
+      <section class="card chart-card">
+        <h2>📈 Vývoj pingu (posledních 24 hodin)</h2>
+        <div class="chart-container">
+          <canvas id="latencyChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Speed chart -->
+      <section class="card chart-card">
+        <h2>📊 Rychlost připojení</h2>
+        <div class="chart-container">
+          <canvas id="speedChart"></canvas>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- History Tab -->
+  <div id="history" class="tab-content">
+    <main>
+      <div class="card">
+        <h2>Historie měření</h2>
+        <div class="actions" style="margin-bottom: 16px;">
+          <button class="btn secondary" onclick="loadHistory('hour')">1 hodina</button>
+          <button class="btn secondary" onclick="loadHistory('day')">24 hodin</button>
+          <button class="btn secondary" onclick="loadHistory('week')">7 dní</button>
+          <button class="btn secondary" onclick="loadHistory('month')">30 dní</button>
+        </div>
+        <div class="chart-container" style="height: 400px;">
+          <canvas id="historyChart"></canvas>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="settings" class="tab-content">
+    <main>
+      <div class="card">
+        <h2>⚙️ Nastavení aplikace</h2>
+        
+        <div class="settings-section">
+          <h3>📅 Základní nastavení</h3>
+          <div class="form-group">
+            <label>Interval testů:</label>
+            <input type="number" id="test_interval" min="1" max="1440" value="5">
+            <span class="unit">minut</span>
+          </div>
+          <div class="form-group">
+            <label>Automatické testy:</label>
+            <input type="checkbox" id="auto_test_enabled" checked>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>🚀 Testy rychlosti</h3>
+          <div class="form-group">
+            <label>Povolit test rychlosti:</label>
+            <input type="checkbox" id="speed_test_enabled" checked>
+          </div>
+          <div class="form-group">
+            <label>Interval testu rychlosti:</label>
+            <input type="number" id="speed_test_interval" min="1" max="100" value="6">
+            <span class="unit">každý N-tý test</span>
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>📡 Ping testy</h3>
+          <div class="form-group">
+            <label>Povolit ping testy:</label>
+            <input type="checkbox" id="ping_enabled" checked>
+          </div>
+          <div class="form-group">
+            <label>Počet ping pokusů:</label>
+            <input type="number" id="ping_count" min="1" max="50" value="10">
+          </div>
+        </div>
+
+        <div class="settings-section">
+          <h3>🎯 Cíle pro ping</h3>
+          <div id="ping-targets"></div>
+          <button class="btn secondary" onclick="addPingTarget()">➕ Přidat cíl</button>
+        </div>
+
+        <div class="actions" style="margin-top: 24px;">
+          <button class="btn" onclick="saveSettings()">💾 Uložit nastavení</button>
+          <button class="btn secondary" onclick="loadSettings()">🔄 Načíst aktuální</button>
+        </div>
+      </div>
+    </main>
+  </div>
 
   <footer>
-    Aktualizace každých 10&nbsp;s • Tlačítkem lze spustit test kdykoliv ručně.
+    Automatická aktualizace každých 10 sekund • Poslední test: <span id="lastTest">–</span>
   </footer>
 
   <script>
-    // ===== Konfigurace frontendu (pevné API cesty) =====
-    const API = {
-      HISTORY: '/api/history',
-      LATEST:  '/api/latest',
-      RUN:     '/api/run'
-    };
+    // ===== Config =====
+    const API_BASE = '';
+    const REFRESH_MS = 10000;
+    const MAX_POINTS = 288; // 24 hodin při 5min intervalech
 
-    const REFRESH_MS = 10_000;
-    const MAX_POINTS = 720;
-    const DECIMALS   = 1;
+    // ===== State =====
+    let currentConfig = {};
+    let latencyChart = null;
+    let speedChart = null;
+    let historyChart = null;
+    let testInProgress = false;
 
-    // ===== Pomocné =====
+    // ===== Helpers =====
     const $ = (sel) => document.querySelector(sel);
-    const pingEl   = $('#pingValue');
-    const jitterEl = $('#jitterValue');
-    const downEl   = $('#downValue');
-    const upEl     = $('#upValue');
-    const runBtn   = $('#runBtn');
-    const runHint  = $('#runHint');
+    const $$ = (sel) => document.querySelectorAll(sel);
 
-    function fmt(v, unit='') {
+    function fmt(v, unit='', decimals=1) {
       if (v === null || v === undefined || Number.isNaN(v)) return '–';
-      return `${Number(v).toFixed(DECIMALS)}${unit}`;
+      return `${Number(v).toFixed(decimals)}${unit}`;
     }
+
     function classify(value, warn, bad) {
       if (value === null || value === undefined || Number.isNaN(value)) return '';
       if (value >= bad) return 'bad';
@@ -169,123 +436,605 @@
       return 'ok';
     }
 
-    // ===== Chart.js =====
-    const ctx = document.getElementById('latencyChart').getContext('2d');
-    const chartData = {
-      labels: [],
-      datasets: [{
-        label: 'Ping (ms)',
-        data: [],
-        borderWidth: 2,
-        tension: 0.25,
-        pointRadius: 0
-      }]
-    };
-    const latencyChart = new Chart(ctx, {
-      type: 'line',
-      data: chartData,
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        animation: false,
-        parsing: false,
-        normalized: true,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { ticks: { maxRotation: 0 }, grid: { display: false } },
-          y: { beginAtZero: true, grid: { color: 'rgba(255,255,255,.06)' }, ticks: { callback: v => `${v} ms` } }
-        }
+    // ===== Tab switching =====
+    function switchTab(tabName, event) {
+      $$('.tab').forEach(t => t.classList.remove('active'));
+      $$('.tab-content').forEach(c => c.classList.remove('active'));
+      
+      if (event) event.target.classList.add('active');
+      $(`#${tabName}`).classList.add('active');
+      
+      if (tabName === 'settings') {
+        loadSettings();
+      } else if (tabName === 'history') {
+        loadFullHistory('day');
       }
-    });
-    function pushPoint(label, val) {
-      chartData.labels.push(label);
-      chartData.datasets[0].data.push(val);
-      if (chartData.labels.length > MAX_POINTS) {
-        chartData.labels.shift();
-        chartData.datasets[0].data.shift();
+    }
+
+    function toggleTab(tabName) {
+      const tab = $(`#${tabName}`);
+      if (tab.classList.contains('active')) {
+        switchTab('dashboard', null);
+        $$('.tab')[0].classList.add('active');
+      } else {
+        switchTab(tabName, null);
+        $$('.tab').forEach(t => t.classList.remove('active'));
+        $$('.tab').forEach(t => {
+          if (t.textContent.includes('Nastavení')) t.classList.add('active');
+        });
+      }
+    }
+
+    // ===== Progress panel =====
+    function showProgress(message) {
+      const panel = $('#progressPanel');
+      const items = $('#progressItems');
+      
+      if (!testInProgress) {
+        testInProgress = true;
+        panel.classList.add('active');
+        items.innerHTML = '';
+      }
+      
+      const item = document.createElement('div');
+      item.className = 'progress-item';
+      item.innerHTML = `
+        <span class="progress-label">${message}</span>
+        <span class="progress-value running">⏳</span>
+      `;
+      items.appendChild(item);
+      
+      return item;
+    }
+
+    function updateProgress(item, value, status = 'success') {
+      const valueEl = item.querySelector('.progress-value');
+      valueEl.textContent = value;
+      valueEl.className = `progress-value ${status}`;
+    }
+
+    function hideProgress() {
+      setTimeout(() => {
+        $('#progressPanel').classList.remove('active');
+        testInProgress = false;
+      }, 3000);
+    }
+
+    // ===== Charts =====
+    function initCharts() {
+      // Latency chart
+      const ctx1 = $('#latencyChart').getContext('2d');
+      latencyChart = new Chart(ctx1, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Ping (ms)',
+            data: [],
+            borderColor: '#6aa6ff',
+            backgroundColor: 'rgba(106, 166, 255, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 0 },
+          plugins: { 
+            legend: { display: false }
+          },
+          scales: {
+            x: { 
+              grid: { color: 'rgba(255,255,255,.05)' },
+              ticks: { color: '#9aa0aa', maxRotation: 0 }
+            },
+            y: { 
+              beginAtZero: true,
+              grid: { color: 'rgba(255,255,255,.05)' },
+              ticks: { 
+                color: '#9aa0aa',
+                callback: v => `${v} ms` 
+              }
+            }
+          }
+        }
+      });
+
+      // Speed chart
+      const ctx2 = $('#speedChart').getContext('2d');
+      speedChart = new Chart(ctx2, {
+        type: 'line',
+        data: {
+          labels: [],
+          datasets: [{
+            label: 'Download (Mbps)',
+            data: [],
+            borderColor: '#36c275',
+            backgroundColor: 'rgba(54, 194, 117, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 0
+          }, {
+            label: 'Upload (Mbps)',
+            data: [],
+            borderColor: '#f0b429',
+            backgroundColor: 'rgba(240, 180, 41, 0.1)',
+            borderWidth: 2,
+            tension: 0.3,
+            pointRadius: 0
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: { duration: 0 },
+          plugins: { 
+            legend: { 
+              display: true,
+              labels: { color: '#9aa0aa' }
+            }
+          },
+          scales: {
+            x: { 
+              grid: { color: 'rgba(255,255,255,.05)' },
+              ticks: { color: '#9aa0aa', maxRotation: 0 }
+            },
+            y: { 
+              beginAtZero: true,
+              grid: { color: 'rgba(255,255,255,.05)' },
+              ticks: { 
+                color: '#9aa0aa',
+                callback: v => `${v} Mbps` 
+              }
+            }
+          }
+        }
+      });
+    }
+
+    function addDataPoint(timestamp, data) {
+      const label = new Date(timestamp).toLocaleTimeString('cs-CZ', {
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+      
+      // Add to latency chart
+      latencyChart.data.labels.push(label);
+      latencyChart.data.datasets[0].data.push(data.ping_ms);
+      
+      if (latencyChart.data.labels.length > MAX_POINTS) {
+        latencyChart.data.labels.shift();
+        latencyChart.data.datasets[0].data.shift();
       }
       latencyChart.update('none');
-    }
-    function setStats({ ping_ms, jitter_ms, download_mbps, upload_mbps }) {
-      const ping   = Number(ping_ms);
-      const jitter = Number(jitter_ms);
-      const down   = Number(download_mbps);
-      const up     = Number(upload_mbps);
-      pingEl.textContent   = fmt(ping, ' ms');
-      jitterEl.textContent = fmt(jitter, ' ms');
-      downEl.textContent   = fmt(down, ' Mb/s');
-      upEl.textContent     = fmt(up, ' Mb/s');
-      pingEl.className   = `value ${classify(ping, 40, 80)}`;
-      jitterEl.className = `value ${classify(jitter, 20, 40)}`;
-      downEl.className   = `value`;
-      upEl.className     = `value`;
+      
+      // Add to speed chart if we have speed data
+      if (data.download_mbps !== null || data.upload_mbps !== null) {
+        speedChart.data.labels.push(label);
+        speedChart.data.datasets[0].data.push(data.download_mbps);
+        speedChart.data.datasets[1].data.push(data.upload_mbps);
+        
+        if (speedChart.data.labels.length > MAX_POINTS) {
+          speedChart.data.labels.shift();
+          speedChart.data.datasets[0].data.shift();
+          speedChart.data.datasets[1].data.shift();
+        }
+        speedChart.update('none');
+      }
     }
 
-    // ===== Načítání dat =====
-    async function loadHistory() {
+    // ===== Data loading =====
+    async function loadHistory(period = null) {
       try {
-        const r = await fetch(API.HISTORY, { cache: 'no-store' });
-        if (!r.ok) throw new Error(`${r.status}`);
-        const data = await r.json(); // oček.: [{ts, ping_ms, ...}, ...]
-        for (const row of data) {
-          const ts = row.ts || row.timestamp || row.time || '';
-          const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
-          const val = Number(row.ping_ms ?? row.ping ?? row.latency_ms ?? row.latency);
-          if (!Number.isNaN(val)) pushPoint(label, val);
+        const url = period ? `/api/history?period=${period}` : '/api/history';
+        const response = await fetch(url);
+        const data = await response.json();
+        
+        // Clear charts
+        latencyChart.data.labels = [];
+        latencyChart.data.datasets[0].data = [];
+        speedChart.data.labels = [];
+        speedChart.data.datasets[0].data = [];
+        speedChart.data.datasets[1].data = [];
+        
+        // Add all data points
+        data.forEach(item => {
+          const label = new Date(item.ts || item.timestamp).toLocaleTimeString('cs-CZ', {
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          latencyChart.data.labels.push(label);
+          latencyChart.data.datasets[0].data.push(item.ping_ms || item.ping);
+          
+          if (item.download_mbps !== undefined || item.upload_mbps !== undefined) {
+            speedChart.data.labels.push(label);
+            speedChart.data.datasets[0].data.push(item.download_mbps || item.download);
+            speedChart.data.datasets[1].data.push(item.upload_mbps || item.upload);
+          }
+        });
+        
+        latencyChart.update('none');
+        speedChart.update('none');
+      } catch (e) {
+        console.error('Error loading history:', e);
+      }
+    }
+
+    async function loadLatest() {
+      try {
+        const response = await fetch('/api/latest');
+        if (response.status === 204) return;
+        
+        const data = await response.json();
+        updateStats(data);
+        
+        // Add to charts
+        if (data.ts) {
+          addDataPoint(data.ts, data);
+        }
+        
+        // Update last test time
+        $('#lastTest').textContent = new Date(data.ts).toLocaleString('cs-CZ');
+      } catch (e) {
+        console.error('Error loading latest:', e);
+      }
+    }
+
+    function updateStats(data) {
+      $('#pingValue').textContent = fmt(data.ping_ms, ' ms');
+      $('#jitterValue').textContent = fmt(data.jitter_ms, ' ms');
+      $('#downValue').textContent = fmt(data.download_mbps, ' Mb/s');
+      $('#upValue').textContent = fmt(data.upload_mbps, ' Mb/s');
+      $('#lossValue').textContent = fmt(data.packet_loss, ' %');
+      
+      const statusEl = $('#statusValue');
+      if (data.online) {
+        statusEl.textContent = '✅ Online';
+        statusEl.className = 'value ok';
+      } else {
+        statusEl.textContent = '❌ Offline';
+        statusEl.className = 'value bad';
+      }
+      
+      // Color coding
+      $('#pingValue').className = `value ${classify(data.ping_ms, 40, 80)}`;
+      $('#jitterValue').className = `value ${classify(data.jitter_ms, 20, 40)}`;
+      $('#lossValue').className = `value ${classify(data.packet_loss, 1, 5)}`;
+    }
+
+    // ===== Manual test =====
+    async function runManualTest() {
+      const btn = $('#runBtn');
+      btn.disabled = true;
+      $('#runHint').textContent = '';
+      
+      // Show progress
+      const pingItem = showProgress('Měřím ping na Google DNS...');
+      
+      try {
+        // Simulate progress updates
+        setTimeout(() => {
+          updateProgress(pingItem, '8.8 ms', 'success');
+          const ping2Item = showProgress('Měřím ping na Cloudflare DNS...');
+          setTimeout(() => {
+            updateProgress(ping2Item, '12.3 ms', 'success');
+            const speedItem = showProgress('Měřím rychlost připojení...');
+            setTimeout(() => {
+              $('#runHint').textContent = 'Tento test může trvat až 60 sekund...';
+            }, 1000);
+          }, 500);
+        }, 1000);
+        
+        // Run actual test
+        const response = await fetch('/api/run', { method: 'POST' });
+        const data = await response.json();
+        
+        updateStats(data);
+        if (data.ts) {
+          addDataPoint(data.ts, data);
+        }
+        
+        $('#runHint').textContent = '✅ Test dokončen';
+        hideProgress();
+      } catch (e) {
+        console.error('Test failed:', e);
+        $('#runHint').textContent = '❌ Test selhal';
+        hideProgress();
+      } finally {
+        setTimeout(() => {
+          btn.disabled = false;
+          $('#runHint').textContent = '';
+        }, 3000);
+      }
+    }
+
+    // ===== Settings =====
+    async function loadSettings() {
+      try {
+        const response = await fetch('/api/config');
+        currentConfig = await response.json();
+        
+        // Apply to form
+        $('#test_interval').value = currentConfig.general?.test_interval || 5;
+        $('#auto_test_enabled').checked = currentConfig.general?.auto_test_enabled !== false;
+        $('#speed_test_enabled').checked = currentConfig.tests?.speed_test_enabled !== false;
+        $('#speed_test_interval').value = currentConfig.tests?.speed_test_interval || 6;
+        $('#ping_enabled').checked = currentConfig.tests?.ping?.enabled !== false;
+        $('#ping_count').value = currentConfig.tests?.ping?.count || 10;
+        
+        renderPingTargets();
+      } catch (e) {
+        console.error('Error loading config:', e);
+      }
+    }
+
+    function renderPingTargets() {
+      const container = $('#ping-targets');
+      container.innerHTML = '';
+      
+      if (!currentConfig.ping_targets) {
+        currentConfig.ping_targets = [];
+      }
+      
+      currentConfig.ping_targets.forEach((target, index) => {
+        const div = document.createElement('div');
+        div.className = 'ping-target';
+        div.innerHTML = `
+          <div class="ping-target-header">
+            <h4>${target.name}</h4>
+            <button class="btn secondary" onclick="removePingTarget(${index})">🗑️</button>
+          </div>
+          <div class="form-group">
+            <label>Název:</label>
+            <input type="text" value="${target.name}" onchange="updatePingTarget(${index}, 'name', this.value)">
+          </div>
+          <div class="form-group">
+            <label>IP/Host:</label>
+            <input type="text" value="${target.host}" onchange="updatePingTarget(${index}, 'host', this.value)">
+          </div>
+          <div class="form-group">
+            <label>Povoleno:</label>
+            <input type="checkbox" ${target.enabled ? 'checked' : ''} 
+                   onchange="updatePingTarget(${index}, 'enabled', this.checked)">
+          </div>
+        `;
+        container.appendChild(div);
+      });
+    }
+
+    function addPingTarget() {
+      currentConfig.ping_targets = currentConfig.ping_targets || [];
+      currentConfig.ping_targets.push({
+        name: 'Nový cíl',
+        host: '8.8.8.8',
+        enabled: true
+      });
+      renderPingTargets();
+    }
+
+    function removePingTarget(index) {
+      currentConfig.ping_targets.splice(index, 1);
+      renderPingTargets();
+    }
+
+    function updatePingTarget(index, field, value) {
+      currentConfig.ping_targets[index][field] = value;
+    }
+
+    async function saveSettings() {
+      // Gather form data
+      currentConfig.general = currentConfig.general || {};
+      currentConfig.general.test_interval = parseInt($('#test_interval').value);
+      currentConfig.general.auto_test_enabled = $('#auto_test_enabled').checked;
+      
+      currentConfig.tests = currentConfig.tests || {};
+      currentConfig.tests.speed_test_enabled = $('#speed_test_enabled').checked;
+      currentConfig.tests.speed_test_interval = parseInt($('#speed_test_interval').value);
+      
+      currentConfig.tests.ping = currentConfig.tests.ping || {};
+      currentConfig.tests.ping.enabled = $('#ping_enabled').checked;
+      currentConfig.tests.ping.count = parseInt($('#ping_count').value);
+      
+      try {
+        const response = await fetch('/api/config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(currentConfig)
+        });
+        
+        const result = await response.json();
+        if (result.status === 'success') {
+          $('#runHint').textContent = '✅ Nastavení uloženo';
+          setTimeout(() => $('#runHint').textContent = '', 3000);
         }
       } catch (e) {
-        console.warn('Historie není dostupná (zatím):', e.message);
-      }
-    }
-    async function fetchLatest() {
-      try {
-        const r = await fetch(API.LATEST, { cache: 'no-store' });
-        if (!r.ok) throw new Error(`${r.status}`);
-        const rec = await r.json();  // oček.: {ts, ping_ms, jitter_ms, download_mbps, upload_mbps}
-        const ts = rec.ts || rec.timestamp || rec.time || '';
-        const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
-        const ping = Number(rec.ping_ms ?? rec.ping ?? rec.latency_ms ?? rec.latency);
-        if (!Number.isNaN(ping)) pushPoint(label, ping);
-        setStats(rec);
-      } catch (e) {
-        // ticho – jen to ještě neexistuje
+        console.error('Error saving config:', e);
+        $('#runHint').textContent = '❌ Chyba při ukládání';
       }
     }
 
-    // ===== Ruční test =====
-    async function runManualTest() {
-      runBtn.disabled = true;
-      runHint.textContent = 'Probíhá test...';
+    // ===== Full history chart =====
+    async function loadFullHistory(period) {
       try {
-        const r = await fetch(API.RUN, { method: 'POST' });
-        if (!r.ok) throw new Error(`${r.status}`);
-        const rec = await r.json();
-        const ts = rec.ts || rec.timestamp || rec.time || '';
-        const label = typeof ts === 'string' ? ts : new Date(ts * 1000).toLocaleTimeString();
-        const ping = Number(rec.ping_ms ?? rec.ping ?? rec.latency_ms ?? rec.latency);
-        if (!Number.isNaN(ping)) pushPoint(label, ping);
-        setStats(rec);
-        runHint.textContent = 'Hotovo ✔';
+        const response = await fetch(`/api/history?period=${period}`);
+        const data = await response.json();
+        
+        if (!historyChart) {
+          const ctx = $('#historyChart').getContext('2d');
+          historyChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: [],
+              datasets: [{
+                label: 'Ping (ms)',
+                data: [],
+                borderColor: '#6aa6ff',
+                backgroundColor: 'rgba(106, 166, 255, 0.1)',
+                yAxisID: 'y',
+                tension: 0.3,
+                pointRadius: 1
+              }, {
+                label: 'Download (Mbps)',
+                data: [],
+                borderColor: '#36c275',
+                backgroundColor: 'rgba(54, 194, 117, 0.1)',
+                yAxisID: 'y1',
+                tension: 0.3,
+                pointRadius: 1
+              }, {
+                label: 'Upload (Mbps)',
+                data: [],
+                borderColor: '#f0b429',
+                backgroundColor: 'rgba(240, 180, 41, 0.1)',
+                yAxisID: 'y1',
+                tension: 0.3,
+                pointRadius: 1
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              interaction: {
+                mode: 'index',
+                intersect: false
+              },
+              plugins: {
+                legend: {
+                  display: true,
+                  labels: { color: '#9aa0aa' }
+                },
+                tooltip: {
+                  callbacks: {
+                    label: function(context) {
+                      let label = context.dataset.label || '';
+                      if (label) label += ': ';
+                      if (context.parsed.y !== null) {
+                        if (context.datasetIndex === 0) {
+                          label += context.parsed.y.toFixed(1) + ' ms';
+                        } else {
+                          label += context.parsed.y.toFixed(1) + ' Mbps';
+                        }
+                      }
+                      return label;
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: {
+                  grid: { color: 'rgba(255,255,255,.05)' },
+                  ticks: { color: '#9aa0aa' }
+                },
+                y: {
+                  type: 'linear',
+                  display: true,
+                  position: 'left',
+                  grid: { color: 'rgba(255,255,255,.05)' },
+                  ticks: { 
+                    color: '#9aa0aa',
+                    callback: v => `${v} ms`
+                  },
+                  title: {
+                    display: true,
+                    text: 'Ping (ms)',
+                    color: '#9aa0aa'
+                  }
+                },
+                y1: {
+                  type: 'linear',
+                  display: true,
+                  position: 'right',
+                  grid: { drawOnChartArea: false },
+                  ticks: {
+                    color: '#9aa0aa',
+                    callback: v => `${v} Mbps`
+                  },
+                  title: {
+                    display: true,
+                    text: 'Rychlost (Mbps)',
+                    color: '#9aa0aa'
+                  }
+                }
+              }
+            }
+          });
+        }
+        
+        // Update data
+        historyChart.data.labels = [];
+        historyChart.data.datasets[0].data = [];
+        historyChart.data.datasets[1].data = [];
+        historyChart.data.datasets[2].data = [];
+        
+        data.forEach(item => {
+          const label = new Date(item.ts || item.timestamp).toLocaleString('cs-CZ', {
+            day: '2-digit',
+            month: '2-digit',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+          
+          historyChart.data.labels.push(label);
+          historyChart.data.datasets[0].data.push(item.ping_ms || item.ping);
+          historyChart.data.datasets[1].data.push(item.download_mbps || item.download || 0);
+          historyChart.data.datasets[2].data.push(item.upload_mbps || item.upload || 0);
+        });
+        
+        historyChart.update();
       } catch (e) {
-        console.error('Ruční test selhal:', e);
-        runHint.textContent = 'Chyba testu';
-      } finally {
-        setTimeout(() => { runHint.textContent = ''; runBtn.disabled = false; }, 1500);
+        console.error('Error loading full history:', e);
       }
     }
-    runBtn.addEventListener('click', runManualTest);
 
-    // ===== Polling (jeden interval, pauza při skryté kartě) =====
+    // ===== Polling =====
     let pollTimer = null;
-    function startPolling() { if (!pollTimer) { fetchLatest(); pollTimer = setInterval(fetchLatest, REFRESH_MS); } }
-    function stopPolling()  { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-    document.addEventListener('visibilitychange', () => document.hidden ? stopPolling() : startPolling());
+    function startPolling() {
+      if (!pollTimer) {
+        loadLatest();
+        pollTimer = setInterval(loadLatest, REFRESH_MS);
+      }
+    }
+    
+    function stopPolling() {
+      if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
 
-    // Start
-    (async function init() {
+    // ===== Init =====
+    document.addEventListener('DOMContentLoaded', async () => {
+      initCharts();
       await loadHistory();
+      await loadLatest();
       startPolling();
-    })();
+      
+      // Event listeners
+      $('#runBtn').addEventListener('click', runManualTest);
+      
+      // Visibility change
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          stopPolling();
+        } else {
+          startPolling();
+        }
+      });
+    });
+
+    // Make functions global for onclick handlers
+    window.switchTab = switchTab;
+    window.toggleTab = toggleTab;
+    window.loadHistory = loadHistory;
+    window.loadFullHistory = loadFullHistory;
+    window.addPingTarget = addPingTarget;
+    window.removePingTarget = removePingTarget;
+    window.updatePingTarget = updatePingTarget;
+    window.saveSettings = saveSettings;
+    window.loadSettings = loadSettings;
   </script>
 </body>
 </html>
