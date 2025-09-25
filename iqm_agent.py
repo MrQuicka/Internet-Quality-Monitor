@@ -2,6 +2,8 @@ import os, csv, time, json, math, socket, sqlite3, statistics, subprocess
 from datetime import datetime, timezone
 from collections import deque
 from typing import Optional, Dict, Any, List
+from fastapi.responses import HTMLResponse, JSONResponse
+
 
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -215,6 +217,34 @@ def health():
         return {"status": "ok"}
     except Exception:
         return {"status": "degraded"}
+    
+@app.get("/", response_class=HTMLResponse)
+def root():
+    return """
+    <html>
+      <head><title>Internet Quality Monitor</title></head>
+      <body style="font-family:system-ui; max-width:720px; margin:40px auto; line-height:1.5">
+        <h1>Internet Quality Monitor</h1>
+        <p>API běží. Užitečné odkazy:</p>
+        <ul>
+          <li><a href="/health">/health</a></li>
+          <li><a href="/metrics">/metrics</a> (Prometheus)</li>
+          <li><a href="/api/results?limit=20">/api/results?limit=20</a></li>
+        </ul>
+      </body>
+    </html>
+    """
+
+@app.post("/run-now")
+def run_now():
+    """Spusť okamžité měření (užitečné pro test)."""
+    t0 = time.perf_counter()
+    res = measure_once()
+    persist(res)
+    dt = time.perf_counter() - t0
+    update_metrics(res, dt)
+    _recent.append(res)
+    return JSONResponse({"status": "ok", "duration_s": round(dt, 2), "result": res})
 
 if __name__ == "__main__":
     # Init DB a CSV
