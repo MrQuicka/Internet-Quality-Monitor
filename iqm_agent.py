@@ -360,12 +360,15 @@ h1{margin:0 0 8px;font-size:32px}
 .button.secondary{background:transparent;color:var(--fg);border:1px solid var(--muted)}
 .grid{display:grid;gap:16px;margin-top:12px;grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
+}
 .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 2px 20px rgba(0,0,0,.15)}
 .label{color:var(--muted);font-size:13px}
 .metric{font-size:28px;font-weight:800;margin-top:6px}
-canvas{width:100%;height:320px}
+.chart-box{position:relative;height:360px}            /* fixed chart height */
 footer{color:var(--muted);font-size:12px;margin-top:10px}
+}
 </style>
+</head>
 </head>
 <body>
 <div class="container">
@@ -403,6 +406,7 @@ footer{color:var(--muted);font-size:12px;margin-top:10px}
 
   <footer>Auto-refresh každých 30 s • Prahy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
 </div>
+}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
