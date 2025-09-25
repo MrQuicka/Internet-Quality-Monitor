@@ -11,6 +11,7 @@ import shlex
 from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
+from io import StringIO
 
 from fastapi import FastAPI, Response, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -79,7 +80,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 _recent: deque[Dict[str, Any]] = deque(maxlen=500)
-
 # =========================
 # Helpers — čas a CSV
 # =========================
@@ -202,9 +202,7 @@ def run_speedtest(aggregated_rtt_ms: Optional[float] = None) -> Dict[str, float]
             ping = float(s.results.ping)
             return {"download_mbps": down, "upload_mbps": up, "ping_ms": ping}
         except Exception as e:
-            raise RuntimeError(f"Speedtest failed: {e}") from cli_err
-
-# =========================
+            raise RuntimeError(f"Speedtest failed: {e}") from cli_err# =========================
 # Ping / jitter / loss
 # =========================
 def ping_stats(target: str, count: int, interval_s: float) -> Dict[str, float]:
@@ -378,12 +376,9 @@ def loop() -> None:
         except Exception:
             errors_total.inc()
         time.sleep(max(5, INTERVAL_SEC))
-
+        # =========================
+# Homer API endpointy
 # =========================
-# UI + API
-# =========================
-# ===== NOVÉ HOMER API ENDPOINTY =====
-
 @app.get("/api/homer-status")
 def homer_status():
     """Endpoint pro Homer message widget s aktuálním stavem připojení"""
@@ -525,314 +520,253 @@ def homer_service_status():
             "subtitle": "❌ Chyba monitoru",
             "emoji": "❌"
         }
-
-# ===== PŮVODNÍ UI + API =====
-
+    # =========================
+# Zbývající API endpointy
+# =========================
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
-    return """
-<!doctype html>
-<html lang="cs">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Internet Quality Monitor</title>
-<style>
-:root{--bg:#0b0f14;--fg:#e6edf3;--muted:#8b949e;--card:#10161e;--accent:#3b82f6;--ok:#10b981;--warn:#f59e0b;--bad:#ef4444}
-@media (prefers-color-scheme: light){
-  :root{--bg:#f7f9fc;--fg:#0b1220;--muted:#5b6577;--card:#ffffff;--accent:#2563eb;--ok:#059669;--warn:#d97706;--bad:#dc2626}
-}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial}
-.container{max-width:1100px;margin:36px auto;padding:0 20px}
-h1{margin:0 0 8px;font-size:32px}
-.sub{color:var(--muted);margin:0 0 12px}
-.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
-.pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:6px 12px;font-weight:700}
-.pill.ok{background:color-mix(in oklab,var(--ok) 20%,transparent);color:var(--ok)}
-.pill.warn{background:color-mix(in oklab,var(--warn) 20%,transparent);color:var(--warn)}
-.pill.bad{background:color-mix(in oklab,var(--bad) 20%,transparent);color:var(--bad)}
-.actions{display:flex;gap:10px;flex-wrap:wrap}
-.button,button{appearance:none;border:0;border-radius:12px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none}
-.button{background:var(--accent);color:#fff}
-.button.secondary{background:transparent;color:var(--fg);border:1px solid var(--muted)}
-.grid{display:grid;gap:16px;margin-top:12px;grid-template-columns:repeat(3,minmax(0,1fr))}
-@media (max-width:900px){.grid{grid-template-columns:1fr}}
-.card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 2px 20px rgba(0,0,0,.15)}
-.label{color:var(--muted);font-size:13px}
-.metric{font-size:28px;font-weight:800;margin-top:6px}
-/* Fix nafukování grafu: wrapper s pevnou výškou + canvas 100% */
-.chart-box{position:relative; height:360px;}
-.chart-box canvas{
-  position:absolute; inset:0;
-  width:100% !important; height:100% !important;
-  display:block;
-}
-footer{color:var(--muted);font-size:12px;margin-top:10px}
-fieldset{border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); border-radius:12px; padding:12px 14px; margin:16px 0;}
-legend{color:var(--muted); padding:0 6px; font-size:12px;}
-.form-row{display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr));}
-.form-row label{display:flex; flex-direction:column; gap:6px; font-size:13px;}
-input[type="text"],input[type="number"],select{padding:8px 10px; border-radius:8px; border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); background:transparent; color:var(--fg)}
-.switch{display:flex; align-items:center; gap:8px;}
-.badge{font-size:12px; color:var(--muted); margin-top:6px;}
-</style>
-</head>
-<body>
-<div class="container">
-  <h1>Internet Quality Monitor</h1>
-  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem. Níže lze měnit chování testů i zobrazený časový rozsah.</p>
+    return "<html><body><h1>Internet Quality Monitor</h1><p>API běží na portu 5001</p><p><a href='/api/homer-status'>Homer Status</a> • <a href='/metrics'>Prometheus</a></p></body></html>"
 
-  <div class="row">
-    <div id="statusPill" class="pill">Načítám…</div>
-    <div class="actions">
-      <label class="label">Rozsah:
-        <select id="range">
-          <option value="2h">2 h</option>
-          <option value="24h" selected>24 h</option>
-          <option value="7d">7 dní</option>
-          <option value="30d">30 dní</option>
-          <option value="all">Vše</option>
-        </select>
-      </label>
-      <button id="runBtn" class="button">Spustit měření</button>
-      <a id="exportBtn" class="button secondary" href="/api/export.csv">Stáhnout CSV</a>
-      <a class="button" href="/metrics" target="_blank" rel="noopener">Prometheus /metrics</a>
-    </div>
-  </div>
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
-  <fieldset>
-    <legend>Nastavení testování</legend>
-    <div class="form-row">
-      <label>Interval měření (s)
-        <input id="interval" type="number" min="5" step="5" value="300">
-      </label>
-      <label>Počet pingů (na target)
-        <input id="pingCount" type="number" min="1" max="50" step="1" value="10">
-      </label>
-      <label>Interval pingů (s)
-        <input id="pingInterval" type="number" min="0.05" step="0.05" value="0.2">
-      </label>
-    </div>
-    <div class="form-row" style="margin-top:8px">
-      <label>Cílové adresy (comma)
-        <input id="targets" type="text" placeholder="8.8.8.8,1.1.1.1">
-      </label>
-      <label>Speedtest server ID
-        <input id="serverId" type="number" min="0" step="1" placeholder="(volitelné)">
-      </label>
-      <label>SMA okno (min)
-        <input id="ma" type="number" min="1" step="1" value="60">
-      </label>
-      <label class="switch" style="grid-column:1/-1">
-        <input id="enableSt" type="checkbox" checked>
-        <span>Použít speedtest (download/upload)</span>
-      </label>
-    </div>
-    <div class="actions" style="margin-top:10px">
-      <button id="saveCfg" class="button secondary">Uložit nastavení</button>
-      <span id="saveInfo" class="label"></span>
-    </div>
-  </fieldset>
+@app.get("/api/results")
+def recent(limit: int = 50):
+    arr = list(_recent)[-limit:]
+    return {"results": arr}
 
-  <div class="grid">
-    <div class="card">
-      <div class="label">Download</div>
-      <div id="dl" class="metric">—</div>
-      <div class="badge" id="dlSmaLbl">SMA (60 min): —</div>
-      <div class="badge" id="dlP10Lbl">P10 (rozsah): —</div>
-    </div>
-    <div class="card">
-      <div class="label">Upload</div>
-      <div id="ul" class="metric">—</div>
-    </div>
-    <div class="card">
-      <div class="label">Ping • Jitter • Loss</div>
-      <div id="lat" class="metric">—</div>
-    </div>
-  </div>
+@app.get("/api/results_range")
+def results_range(
+    last: Optional[str] = Query(None, description="např. 2h, 24h, 7d, 30d"),
+    frm: Optional[str] = Query(None, description="ISO 8601"),
+    to: Optional[str] = Query(None, description="ISO 8601"),
+    limit: int = Query(5000, ge=1, le=200000),
+):
+    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu (nebo za poslední 'last')."""
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
+        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
 
-  <div class="card" style="margin-top:16px; overflow:hidden">
-    <div class="label" id="updated">Naposledy: —</div>
-    <div class="chart-box"><canvas id="chart"></canvas></div>
-  </div>
+    out: List[Dict[str, Any]] = []
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            cur = conn.execute(
+                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
+                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC LIMIT ?",
+                (dt_from.isoformat(), dt_to.isoformat(), limit),
+            )
+            for ts, d, u, p, j, l in cur.fetchall():
+                out.append({"ts": ts, "download_mbps": d, "upload_mbps": u, "ping_ms": p, "jitter_ms": j, "packet_loss_pct": l})
+    else:
+        if os.path.exists(CSV_PATH):
+            with open(CSV_PATH, "r") as f:
+                r = csv.reader(f)
+                header = next(r, None)
+                for row in r:
+                    try:
+                        ts = datetime.fromisoformat(row[0])
+                        if dt_from <= ts <= dt_to:
+                            out.append(_row_to_obj(row))
+                            if len(out) >= limit:
+                                break
+                    except Exception:
+                        pass
+    return {"results": out}
 
-  <div class="card" style="margin-top:16px; overflow:hidden">
-    <div class="label">Latence / Jitter / Packet loss</div>
-    <div class="chart-box"><canvas id="chart2"></canvas></div>
-  </div>
+@app.get("/api/export.csv")
+def export_csv(
+    last: Optional[str] = Query(None),
+    frm: Optional[str] = Query(None),
+    to: Optional[str] = Query(None),
+):
+    """Export CSV v daném časovém intervalu."""
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc)
+                                                          
+# =========================
+# Zbývající API endpointy
+# =========================
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def root() -> str:
+    return "<html><body><h1>Internet Quality Monitor</h1><p>API běží na portu 5001</p><p><a href='/api/homer-status'>Homer Status</a> • <a href='/metrics'>Prometheus</a></p></body></html>"
 
-  <footer>Auto-refresh každých 30 s • Prahy pro barvy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
-</div>
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-const qs = new URLSearchParams(location.search);
-const DLOW = Number(qs.get('dlow')||200);
-const ULOW = Number(qs.get('uplow')||200);
-let chart, chart2;
+@app.get("/api/results")
+def recent(limit: int = 50):
+    arr = list(_recent)[-limit:]
+    return {"results": arr}
 
-function cls(r){
-  if ((r.packet_loss_pct||0) > 5 || (r.download_mbps||0) < 5) return 'bad';
-  if ((r.packet_loss_pct||0) > 1 || (r.jitter_ms||0) > 30 || (r.ping_ms||0) > 80 ||
-      (r.download_mbps||0) < DLOW*0.5 || (r.upload_mbps||0) < ULOW*0.5) return 'warn';
-  return 'ok';
-}
-function fmt(n,u){return (n==null || Number.isNaN(n)) ? '—' : (Number(n).toFixed(1)+' '+u)}
-function sma(arr, k){
-  k = Math.max(1, k);
-  const out = new Array(arr.length).fill(null);
-  let sum = 0;
-  for (let i=0;i<arr.length;i++){
-    const v = Number(arr[i] ?? 0);
-    sum += v;
-    if (i >= k) sum -= Number(arr[i-k] ?? 0);
-    if (i >= k-1) out[i] = sum / k;
-  }
-  return out;
-}
-function percentile(arr, p){
-  const a = arr.map(Number).filter(x=>Number.isFinite(x)).sort((x,y)=>x-y);
-  if (!a.length) return NaN;
-  const idx = (a.length-1) * p;
-  const lo = Math.floor(idx), hi = Math.ceil(idx);
-  if (lo === hi) return a[lo];
-  return a[lo] + (a[hi]-a[lo]) * (idx-lo);
-}
+@app.get("/api/results_range")
+def results_range(
+    last: Optional[str] = Query(None, description="např. 2h, 24h, 7d, 30d"),
+    frm: Optional[str] = Query(None, description="ISO 8601"),
+    to: Optional[str] = Query(None, description="ISO 8601"),
+    limit: int = Query(5000, ge=1, le=200000),
+):
+    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu (nebo za poslední 'last')."""
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
+        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
 
-async function loadCfg(){
-  const r = await fetch('/api/config'); const c = await r.json();
-  document.getElementById('interval').value = c.interval_sec;
-  document.getElementById('pingCount').value = c.ping_count;
-  document.getElementById('pingInterval').value = c.ping_interval_s;
-  document.getElementById('targets').value = c.targets.join(', ');
-  document.getElementById('serverId').value = c.server_id || '';
-  document.getElementById('enableSt').checked = c.enable_speedtest;
+    out: List[Dict[str, Any]] = []
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            cur = conn.execute(
+                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
+                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC LIMIT ?",
+                (dt_from.isoformat(), dt_to.isoformat(), limit),
+            )
+            for ts, d, u, p, j, l in cur.fetchall():
+                out.append({"ts": ts, "download_mbps": d, "upload_mbps": u, "ping_ms": p, "jitter_ms": j, "packet_loss_pct": l})
+    else:
+        if os.path.exists(CSV_PATH):
+            with open(CSV_PATH, "r") as f:
+                r = csv.reader(f)
+                header = next(r, None)
+                for row in r:
+                    try:
+                        ts = datetime.fromisoformat(row[0])
+                        if dt_from <= ts <= dt_to:
+                            out.append(_row_to_obj(row))
+                            if len(out) >= limit:
+                                break
+                    except Exception:
+                        pass
+    return {"results": out}
 
-  const savedMa = Number(localStorage.getItem('iqm_ma') || '60');
-  document.getElementById('ma').value = savedMa;
-}
+@app.get("/api/export.csv")
+def export_csv(
+    last: Optional[str] = Query(None),
+    frm: Optional[str] = Query(None),
+    to: Optional[str] = Query(None),
+):
+    """Export CSV v daném časovém intervalu."""
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
+        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
 
-async function saveCfg(){
-  const ma = Number(document.getElementById('ma').value) || 60;
-  localStorage.setItem('iqm_ma', String(ma));
+    rows: List[List[str]] = [["ts","download_mbps","upload_mbps","ping_ms","jitter_ms","packet_loss_pct"]]
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            cur = conn.execute(
+                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
+                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC",
+                (dt_from.isoformat(), dt_to.isoformat()),
+            )
+            for ts, d, u, p, j, l in cur.fetchall():
+                rows.append([ts, str(d), str(u), str(p), str(j), str(l)])
+    else:
+        if os.path.exists(CSV_PATH):
+            with open(CSV_PATH, "r") as f:
+                r = csv.reader(f)
+                header = next(r, None)
+                for row in r:
+                    try:
+                        ts = datetime.fromisoformat(row[0])
+                        if dt_from <= ts <= dt_to:
+                            rows.append(row)
+                    except Exception:
+                        pass
 
-  const body = {
-    interval_sec: Number(document.getElementById('interval').value),
-    ping_count: Number(document.getElementById('pingCount').value),
-    ping_interval_s: Number(document.getElementById('pingInterval').value),
-    targets: document.getElementById('targets').value.split(',').map(s=>s.trim()).filter(Boolean),
-    server_id: Number(document.getElementById('serverId').value) || null,
-    enable_speedtest: document.getElementById('enableSt').checked
-  };
-  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  await r.json();
-  document.getElementById('saveInfo').textContent = 'Uloženo ✔';
-  setTimeout(()=>document.getElementById('saveInfo').textContent='', 2000);
-  load(); // přepočítej graf se SMA
-}
+    buf = StringIO()
+    cw = csv.writer(buf)
+    cw.writerows(rows)
+    data = buf.getvalue().encode("utf-8")
+    filename = f"results_{dt_from.date()}_{dt_to.date()}.csv"
+    return Response(data, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
-async function load(){
-  const range = document.getElementById('range').value;
-  const url = range==='all' ? '/api/results?limit=2000' : `/api/results_range?last=${encodeURIComponent(range)}&limit=5000`;
-  document.getElementById('exportBtn').href = range==='all' ? '/api/export.csv' : `/api/export.csv?last=${encodeURIComponent(range)}`;
-
-  const r = await fetch(url);
-  const data = await r.json();
-  const arr = data.results || [];
-  if (!arr.length) return;
-
-  const last = arr[arr.length-1];
-  document.getElementById('dl').textContent = fmt(last.download_mbps,'Mb/s');
-  document.getElementById('ul').textContent = fmt(last.upload_mbps,'Mb/s');
-  document.getElementById('lat').textContent =
-    `${fmt(last.ping_ms,'ms')} • ${fmt(last.jitter_ms,'ms')} • ${(last.packet_loss_pct||0).toFixed(2)}%`;
-  document.getElementById('updated').textContent = 'Naposledy: ' + new Date(last.ts).toLocaleString('cs-CZ');
-
-  const pill = document.getElementById('statusPill'); const c = cls(last);
-  pill.className = 'pill '+c;
-  pill.textContent = c==='ok' ? 'Stav: OK' : c==='warn' ? 'Stav: Degradace' : 'Stav: Výpadek';
-
-  const labels = arr.map(x => new Date(x.ts).toLocaleTimeString());
-  const dl = arr.map(x => x.download_mbps);
-  const ul = arr.map(x => x.upload_mbps);
-  const ping = arr.map(x => x.ping_ms);
-  const jitter = arr.map(x => x.jitter_ms);
-  const loss = arr.map(x => x.packet_loss_pct);
-
-  // SMA okno (minuty) -> počet vzorků dle intervalu
-  const cfg = await (await fetch('/api/config')).json();
-  const maMin = Number(localStorage.getItem('iqm_ma') || document.getElementById('ma').value || 60);
-  const k = Math.max(1, Math.round((maMin*60) / cfg.interval_sec));
-  const dl_sma = sma(dl, k);
-  const p10 = percentile(dl, 0.10);
-
-  document.getElementById('dlSmaLbl').textContent = `SMA (${maMin} min): ${fmt(dl_sma.at(-1),'Mb/s')}`;
-  document.getElementById('dlP10Lbl').textContent = `P10 (rozsah): ${fmt(p10,'Mb/s')}`;
-
-  const el = document.getElementById('chart');
-  if (!chart){
-    chart = new Chart(el, {
-      type: 'line',
-      data: { labels, datasets: [
-        { label: 'Download (Mb/s)', data: dl },
-        { label: 'Upload (Mb/s)', data: ul },
-        { label: `Download SMA (${maMin} min)`, data: dl_sma, borderDash:[6,4] }
-      ]},
-      options: { animation:false, responsive:true, maintainAspectRatio:false, resizeDelay:150,
-        interaction:{mode:'index',intersect:false},
-        scales:{ y:{ beginAtZero:true } }
-      }
-    });
-  } else {
-    chart.data.labels = labels;
-    chart.data.datasets[0].data = dl;
-    chart.data.datasets[1].data = ul;
-    if (chart.data.datasets.length < 3) {
-      chart.data.datasets.push({ label:`Download SMA (${maMin} min)`, data: dl_sma, borderDash:[6,4] });
-    } else {
-      chart.data.datasets[2].label = `Download SMA (${maMin} min)`;
-      chart.data.datasets[2].data = dl_sma;
+@app.get("/api/config")
+def get_config():
+    return {
+        "interval_sec": INTERVAL_SEC,
+        "ping_count": PING_COUNT,
+        "ping_interval_s": PING_INTERVAL_S,
+        "targets": TARGETS,
+        "server_id": _extract_server_id(SPEEDTEST_EXTRA),
+        "enable_speedtest": ENABLE_SPEEDTEST,
+        "retention_days": RETENTION_DAYS,
     }
-    chart.update('none');
-  }
 
-  const el2 = document.getElementById('chart2');
-  if (!chart2){
-    chart2 = new Chart(el2, {
-      type: 'line',
-      data: { labels, datasets: [
-        { label: 'Ping (ms)', data: ping },
-        { label: 'Jitter (ms)', data: jitter, borderDash: [6,4] },
-        { label: 'Loss (%)', data: loss, yAxisID: 'y1' }
-      ]},
-      options: { animation:false, responsive:true, maintainAspectRatio:false, resizeDelay:150,
-        interaction:{mode:'index',intersect:false},
-        scales:{ y:{ beginAtZero:true }, y1:{ beginAtZero:true, position:'right' } }
-      }
-    });
-  } else {
-    chart2.data.labels = labels;
-    chart2.data.datasets[0].data = ping;
-    chart2.data.datasets[1].data = jitter;
-    chart2.data.datasets[2].data = loss;
-    chart2.update('none');
-  }
-}
+def _extract_server_id(extra: List[str]) -> Optional[int]:
+    if "--server-id" in extra:
+        try:
+            idx = extra.index("--server-id")
+            return int(extra[idx+1])
+        except Exception:
+            return None
+    return None
 
-document.getElementById('runBtn').onclick = async () => {
-  const b = document.getElementById('runBtn');
-  b.disabled = true; b.textContent = 'Měřím…';
-  try { await fetch('/run-now', {method:'POST'}); await load(); }
-  catch(e){ alert('Měření se nepovedlo: '+e); }
-  finally { b.disabled=false; b.textContent='Spustit měření';}
-};
-document.getElementById('saveCfg').onclick = saveCfg;
-document.getElementById('range').onchange = load;
+@app.post("/api/config")
+def set_config(payload: Dict[str, Any] = Body(...)):
+    global INTERVAL_SEC, PING_COUNT, PING_INTERVAL_S, TARGETS, SPEEDTEST_EXTRA, ENABLE_SPEEDTEST
+    if "interval_sec" in payload:
+        INTERVAL_SEC = max(5, int(payload["interval_sec"]))
+    if "ping_count" in payload:
+        PING_COUNT = max(1, min(50, int(payload["ping_count"])))
+    if "ping_interval_s" in payload:
+        PING_INTERVAL_S = max(0.01, float(payload["ping_interval_s"]))
+    if "targets" in payload and isinstance(payload["targets"], list):
+        TARGETS = [str(t).strip() for t in payload["targets"] if str(t).strip()]
+    if "enable_speedtest" in payload:
+        ENABLE_SPEEDTEST = bool(payload["enable_speedtest"])
+    if "server_id" in payload:
+        sid = payload["server_id"]
+        if sid is None or int(sid) <= 0:
+            SPEEDTEST_EXTRA = [x for x in SPEEDTEST_EXTRA if x != "--server-id" and not x.isdigit()]
+        else:
+            cleaned = []
+            skip_next = False
+            for x in SPEEDTEST_EXTRA:
+                if skip_next: skip_next = False; continue
+                if x == "--server-id": skip_next = True; continue
+                cleaned.append(x)
+            SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
+    return get_config()
 
-loadCfg();
-load(); setInterval(load, 30000);
-</script>
-</body>
-</html>
-    """
+@app.get("/health")
+def health():
+    try:
+        socket.gethostbyname("google.com")
+        return {"status": "ok"}
+    except Exception:
+        return {"status": "degraded"}
+
+@app.post("/run-now")
+def run_now():
+    """Spuštění měření okamžitě."""
+    res = measure_once()
+    persist(res)
+    prune_old_data()
+    _recent.append(res)
+    return JSONResponse({"status": "ok", "result": res})
+
+# =========================
+# Hlavní spouštěč
+# =========================
+if __name__ == "__main__":
+    print("🚀 Spouštím Internet Quality Monitor...")
+    ensure_csv_header()
+    init_sqlite()
+
+    import threading
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+    print(f"📊 Monitoring spuštěn na portu {PORT}")
+
+    uvicorn.run(app, host=BIND, port=PORT) - timedelta(hours=24)
