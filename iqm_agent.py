@@ -12,7 +12,7 @@ from collections import deque
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Response, Body
+from fastapi import FastAPI, Response, Body, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from prometheus_client import (
@@ -81,7 +81,7 @@ app.add_middleware(
 _recent: deque[Dict[str, Any]] = deque(maxlen=500)
 
 # =========================
-# Perzistence
+# Helpers — čas a CSV
 # =========================
 def ensure_csv_header() -> None:
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
@@ -133,6 +133,36 @@ def prune_old_data() -> None:
         with sqlite3.connect(SQLITE_PATH) as conn:
             conn.execute("DELETE FROM results WHERE ts < ?", (cutoff.isoformat(),))
             conn.commit()
+
+def _parse_last(s: str) -> timedelta:
+    """Parse '2h', '24h', '7d', '30d', '15m', '1w' → timedelta."""
+    s = s.strip().lower()
+    if not s: raise ValueError("empty")
+    num = "".join(ch for ch in s if ch.isdigit())
+    unit = s[len(num):]
+    if not num or unit not in {"m","h","d","w"}: raise ValueError("bad duration")
+    n = int(num)
+    if unit == "m": return timedelta(minutes=n)
+    if unit == "h": return timedelta(hours=n)
+    if unit == "d": return timedelta(days=n)
+    if unit == "w": return timedelta(weeks=n)
+    raise ValueError("bad unit")
+
+def _parse_iso(dt: str) -> datetime:
+    x = datetime.fromisoformat(dt)
+    if x.tzinfo is None:
+        x = x.replace(tzinfo=timezone.utc)
+    return x
+
+def _row_to_obj(row: List[str]) -> Dict[str, Any]:
+    return {
+        "ts": row[0],
+        "download_mbps": float(row[1]),
+        "upload_mbps": float(row[2]),
+        "ping_ms": float(row[3]),
+        "jitter_ms": float(row[4]),
+        "packet_loss_pct": float(row[5]),
+    }
 
 # =========================
 # Speedtest
@@ -249,9 +279,7 @@ def measure_once() -> Dict[str, Any]:
     while attempt <= RETRY_MAX:
         try:
             t0 = time.perf_counter()
-            # ping/jitter/loss + rtt
             pp = aggregate_ping(TARGETS)
-            # speedtest (download/upload/ping) — může být vypnutý
             st = run_speedtest(aggregated_rtt_ms=pp["rtt_ms"])
 
             now = datetime.now(timezone.utc).isoformat()
@@ -328,7 +356,6 @@ def loop() -> None:
             pass
         time.sleep(2)
 
-    # Hlavní smyčka s živým INTERVAL_SEC
     while True:
         try:
             res = measure_once()
@@ -387,21 +414,30 @@ fieldset{border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); bord
 legend{color:var(--muted); padding:0 6px; font-size:12px;}
 .form-row{display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr));}
 .form-row label{display:flex; flex-direction:column; gap:6px; font-size:13px;}
-input[type="text"],input[type="number"]{padding:8px 10px; border-radius:8px; border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); background:transparent; color:var(--fg)}
+input[type="text"],input[type="number"],select{padding:8px 10px; border-radius:8px; border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); background:transparent; color:var(--fg)}
 .switch{display:flex; align-items:center; gap:8px;}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Internet Quality Monitor</h1>
-  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem. Níže lze měnění chování testů za běhu.</p>
+  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem. Níže lze měnit chování testů i zobrazený časový rozsah.</p>
 
   <div class="row">
     <div id="statusPill" class="pill">Načítám…</div>
     <div class="actions">
+      <label class="label">Rozsah:
+        <select id="range">
+          <option value="2h">2 h</option>
+          <option value="24h" selected>24 h</option>
+          <option value="7d">7 dní</option>
+          <option value="30d">30 dní</option>
+          <option value="all">Vše</option>
+        </select>
+      </label>
       <button id="runBtn" class="button">Spustit měření</button>
+      <a id="exportBtn" class="button secondary" href="/api/export.csv">Stáhnout CSV</a>
       <a class="button" href="/metrics" target="_blank" rel="noopener">Prometheus /metrics</a>
-      <a class="button secondary" href="/api/export.csv">Stáhnout CSV</a>
     </div>
   </div>
 
@@ -499,13 +535,17 @@ async function saveCfg(){
     enable_speedtest: document.getElementById('enableSt').checked
   };
   const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
-  const c = await r.json();
+  await r.json();
   document.getElementById('saveInfo').textContent = 'Uloženo ✔';
   setTimeout(()=>document.getElementById('saveInfo').textContent='', 2000);
 }
 
 async function load(){
-  const r = await fetch('/api/results?limit=240');
+  const range = document.getElementById('range').value;
+  const url = range==='all' ? '/api/results?limit=2000' : `/api/results_range?last=${encodeURIComponent(range)}&limit=5000`;
+  document.getElementById('exportBtn').href = range==='all' ? '/api/export.csv' : `/api/export.csv?last=${encodeURIComponent(range)}`;
+
+  const r = await fetch(url);
   const data = await r.json();
   const arr = data.results || [];
   if (!arr.length) return;
@@ -579,6 +619,7 @@ document.getElementById('runBtn').onclick = async () => {
   finally { b.disabled=false; b.textContent='Spustit měření';}
 };
 document.getElementById('saveCfg').onclick = saveCfg;
+document.getElementById('range').onchange = load;
 
 loadCfg();
 load(); setInterval(load, 30000);
@@ -596,21 +637,93 @@ def recent(limit: int = 50):
     arr = list(_recent)[-limit:]
     return {"results": arr}
 
+@app.get("/api/results_range")
+def results_range(
+    last: Optional[str] = Query(None, description="např. 2h, 24h, 7d, 30d"),
+    frm: Optional[str] = Query(None, description="ISO 8601"),
+    to: Optional[str] = Query(None, description="ISO 8601"),
+    limit: int = Query(5000, ge=1, le=200000),
+):
+    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu (nebo za poslední 'last')."""
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
+        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
+
+    out: List[Dict[str, Any]] = []
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            cur = conn.execute(
+                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
+                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC LIMIT ?",
+                (dt_from.isoformat(), dt_to.isoformat(), limit),
+            )
+            for ts, d, u, p, j, l in cur.fetchall():
+                out.append({"ts": ts, "download_mbps": d, "upload_mbps": u, "ping_ms": p, "jitter_ms": j, "packet_loss_pct": l})
+    else:
+        if os.path.exists(CSV_PATH):
+            with open(CSV_PATH, "r") as f:
+                r = csv.reader(f)
+                header = next(r, None)
+                for row in r:
+                    try:
+                        ts = datetime.fromisoformat(row[0])
+                        if dt_from <= ts <= dt_to:
+                            out.append(_row_to_obj(row))
+                            if len(out) >= limit:
+                                break
+                    except Exception:
+                        pass
+    return {"results": out}
+
 @app.get("/api/export.csv")
-def export_csv():
-    try:
-        with open(CSV_PATH, "rb") as f:
-            data = f.read()
-        return Response(
-            data,
-            media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=results.csv"},
-        )
-    except FileNotFoundError:
-        return Response(
-            "ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct\n",
-            media_type="text/csv",
-        )
+def export_csv(
+    last: Optional[str] = Query(None),
+    frm: Optional[str] = Query(None),
+    to: Optional[str] = Query(None),
+):
+    """Export CSV v daném časovém intervalu. Parametry jako /api/results_range."""
+    # Výchozí rozsah = posledních 24h
+    if last:
+        dt_to = datetime.now(timezone.utc)
+        dt_from = dt_to - _parse_last(last)
+    else:
+        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
+        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
+
+    rows: List[List[str]] = [["ts","download_mbps","upload_mbps","ping_ms","jitter_ms","packet_loss_pct"]]
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            cur = conn.execute(
+                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
+                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC",
+                (dt_from.isoformat(), dt_to.isoformat()),
+            )
+            for ts, d, u, p, j, l in cur.fetchall():
+                rows.append([ts, str(d), str(u), str(p), str(j), str(l)])
+    else:
+        if os.path.exists(CSV_PATH):
+            with open(CSV_PATH, "r") as f:
+                r = csv.reader(f)
+                header = next(r, None)
+                for row in r:
+                    try:
+                        ts = datetime.fromisoformat(row[0])
+                        if dt_from <= ts <= dt_to:
+                            rows.append(row)
+                    except Exception:
+                        pass
+
+    # serialize CSV do bytu
+    from io import StringIO
+    buf = StringIO()
+    cw = csv.writer(buf)
+    cw.writerows(rows)
+    data = buf.getvalue().encode("utf-8")
+    filename = f"results_{dt_from.date()}_{dt_to.date()}.csv"
+    return Response(data, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
 
 @app.get("/api/config")
 def get_config():
@@ -636,38 +749,26 @@ def _extract_server_id(extra: List[str]) -> Optional[int]:
 @app.post("/api/config")
 def set_config(payload: Dict[str, Any] = Body(...)):
     global INTERVAL_SEC, PING_COUNT, PING_INTERVAL_S, TARGETS, SPEEDTEST_EXTRA, ENABLE_SPEEDTEST
-    # interval
     if "interval_sec" in payload:
         INTERVAL_SEC = max(5, int(payload["interval_sec"]))
-    # ping count/interval
     if "ping_count" in payload:
         PING_COUNT = max(1, min(50, int(payload["ping_count"])))
     if "ping_interval_s" in payload:
         PING_INTERVAL_S = max(0.01, float(payload["ping_interval_s"]))
-    # targets
     if "targets" in payload and isinstance(payload["targets"], list):
         TARGETS = [str(t).strip() for t in payload["targets"] if str(t).strip()]
-    # speedtest enable
     if "enable_speedtest" in payload:
         ENABLE_SPEEDTEST = bool(payload["enable_speedtest"])
-    # server-id (reset nebo nastavení)
     if "server_id" in payload:
         sid = payload["server_id"]
         if sid is None or int(sid) <= 0:
-            # odstraníme server-id
             SPEEDTEST_EXTRA = [x for x in SPEEDTEST_EXTRA if x != "--server-id" and not x.isdigit()]
         else:
-            # nastavíme / nahradíme
-            # vyhoď existující --server-id
             cleaned = []
             skip_next = False
-            for i, x in enumerate(SPEEDTEST_EXTRA):
-                if skip_next:
-                    skip_next = False
-                    continue
-                if x == "--server-id":
-                    skip_next = True
-                    continue
+            for x in SPEEDTEST_EXTRA:
+                if skip_next: skip_next = False; continue
+                if x == "--server-id": skip_next = True; continue
                 cleaned.append(x)
             SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
     return get_config()
