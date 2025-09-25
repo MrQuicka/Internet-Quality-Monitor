@@ -213,9 +213,12 @@ def aggregate_ping(targets: List[str]) -> Dict[str, float]:
 
     # robustnější metrika: medián, NaN ignorujeme
     jitter_vals = [j for j in jitters if not math.isnan(j)]
-    jitter = statistics.median(jitter_vals) if jitter_vals else 0.0
+    if jitter_vals:
+        jitter = statistics.median(jitter_vals)
+    else:
+        jitter = 0.0
     loss = statistics.median(losses) if losses else 100.0
-    return {"packet_loss_pct": jitter if math.isfinite(jitter) else 0.0, "jitter_ms": jitter, "loss_pct": loss}
+    return {"jitter_ms": float(jitter), "loss_pct": float(loss)}
 
 
 # =========================

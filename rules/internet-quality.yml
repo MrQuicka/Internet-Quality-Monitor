@@ -1,0 +1,38 @@
+groups:
+- name: internet-quality
+  rules:
+  - alert: InternetDownloadLow
+    expr: avg_over_time(iqm_download_mbps[15m]) < 200
+    for: 10m
+    labels: {severity: warning}
+    annotations:
+      summary: "Download pod 200 Mb/s ≥15m"
+
+  - alert: InternetUploadLow
+    expr: avg_over_time(iqm_upload_mbps[15m]) < 200
+    for: 10m
+    labels: {severity: warning}
+    annotations:
+      summary: "Upload pod 200 Mb/s ≥15m"
+
+  - alert: InternetPacketLossHigh
+    expr: avg_over_time(iqm_packet_loss_pct[10m]) > 1
+    for: 10m
+    labels: {severity: critical}
+    annotations:
+      summary: "Packet loss > 1 % ≥10m"
+
+  - alert: InternetJitterHigh
+    expr: avg_over_time(iqm_jitter_ms[10m]) > 15
+    for: 10m
+    labels: {severity: warning}
+    annotations:
+      summary: "Jitter > 15 ms ≥10m"
+
+  - alert: InternetPingDegraded
+    # proti dlouhodobému průměru (+15 ms)
+    expr: avg_over_time(iqm_ping_ms[15m]) > (avg_over_time(iqm_ping_ms[7d]) + 15)
+    for: 15m
+    labels: {severity: warning}
+    annotations:
+      summary: "Ping výrazně zhoršený ≥15m"
