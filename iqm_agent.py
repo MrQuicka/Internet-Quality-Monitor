@@ -520,7 +520,53 @@ def homer_service_status():
             "subtitle": "❌ Chyba monitoru",
             "emoji": "❌"
         }
-    # =========================
+
+@app.get("/api/latest")
+def api_latest():
+    """Get latest measurement result"""
+    if not _recent:
+        return Response(status_code=204)  # No content
+    
+    latest = list(_recent)[-1]
+    return {
+        "ts": latest["ts"],
+        "ping_ms": latest.get("ping_ms"),
+        "jitter_ms": latest.get("jitter_ms"), 
+        "download_mbps": latest.get("download_mbps"),
+        "upload_mbps": latest.get("upload_mbps"),
+        "packet_loss": latest.get("packet_loss_pct"),
+        "online": latest.get("online", True)
+    }
+
+@app.get("/api/history")
+def api_history():
+    """Get measurement history - compatible with dashboard"""
+    period = request.args.get('period', 'day')
+    limit = min(int(request.args.get('limit', 288)), 1000)
+    
+    # Use existing results endpoint
+    arr = list(_recent)[-limit:]
+    
+    # Transform data for dashboard compatibility
+    data = []
+    for item in arr:
+        data.append({
+            'ts': item['ts'],
+            'timestamp': item['ts'],  # Dashboard compatibility
+            'ping_ms': item.get('ping_ms'),
+            'ping': item.get('ping_ms'),  # Dashboard compatibility
+            'jitter_ms': item.get('jitter_ms'),
+            'download_mbps': item.get('download_mbps'),
+            'download': item.get('download_mbps'),  # Dashboard compatibility
+            'upload_mbps': item.get('upload_mbps'), 
+            'upload': item.get('upload_mbps'),  # Dashboard compatibility
+            'packet_loss': item.get('packet_loss_pct'),
+            'online': item.get('online', True)
+        })
+    
+    return data
+
+# =========================
 # Zbývající API endpointy
 # =========================
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
