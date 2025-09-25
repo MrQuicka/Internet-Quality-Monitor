@@ -9,6 +9,7 @@ from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 import uvicorn
+import shlex    
 
 # ====== Konfigurace (ENV s defaulty) ======
 TZ = os.getenv("TZ", "Europe/Prague")

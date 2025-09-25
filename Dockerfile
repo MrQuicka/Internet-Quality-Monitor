@@ -1,21 +1,23 @@
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    iputils-ping \
-    curl \
-    gcc \
-    python3-dev \
-    && rm -rf /var/lib/apt/lists/*
+# systémové nástroje: ping + curl + certifikáty + gnupg (repo pro Ookla)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iputils-ping curl ca-certificates gnupg \
+ && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-COPY requirements.txt .
+# instalace Ookla speedtest CLI
+RUN set -eux; \
+    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends speedtest; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application files
-COPY . .
+COPY . ./
 
-# Run the application
-CMD ["python", "-u", "iqm_agent.py"]
+EXPOSE 5001
+CMD ["python", "iqm_agent.py"]
