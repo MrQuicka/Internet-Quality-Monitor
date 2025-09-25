@@ -330,22 +330,167 @@ def loop() -> None:
 # =========================
 # FastAPI endpointy
 # =========================
-@app.get("/", response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
     return """
-    <html>
-      <head><title>Internet Quality Monitor</title></head>
-      <body style="font-family:system-ui; max-width:720px; margin:40px auto; line-height:1.6">
-        <h1>Internet Quality Monitor</h1>
-        <p>API běží. Užitečné odkazy:</p>
-        <ul>
-          <li><a href="/health">/health</a></li>
-          <li><a href="/metrics">/metrics</a> (Prometheus)</li>
-          <li><a href="/api/results?limit=20">/api/results?limit=20</a></li>
-        </ul>
-      </body>
-    </html>
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Internet Quality Monitor</title>
+<style>
+:root{--bg:#0b0f14;--fg:#e6edf3;--muted:#8b949e;--card:#10161e;--accent:#3b82f6;--ok:#10b981;--warn:#f59e0b;--bad:#ef4444}
+@media (prefers-color-scheme: light){
+  :root{--bg:#f7f9fc;--fg:#0b1220;--muted:#5b6577;--card:#ffffff;--accent:#2563eb;--ok:#059669;--warn:#d97706;--bad:#dc2626}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,"Helvetica Neue",Arial}
+.container{max-width:1100px;margin:36px auto;padding:0 20px}
+h1{margin:0 0 8px;font-size:32px}
+.sub{color:var(--muted);margin:0 0 12px}
+.row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.pill{display:inline-flex;align-items:center;gap:8px;border-radius:999px;padding:6px 12px;font-weight:700}
+.pill.ok{background:color-mix(in oklab,var(--ok) 20%,transparent);color:var(--ok)}
+.pill.warn{background:color-mix(in oklab,var(--warn) 20%,transparent);color:var(--warn)}
+.pill.bad{background:color-mix(in oklab,var(--bad) 20%,transparent);color:var(--bad)}
+.actions{display:flex;gap:10px;flex-wrap:wrap}
+.button,button{appearance:none;border:0;border-radius:12px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none}
+.button{background:var(--accent);color:#fff}
+.button.secondary{background:transparent;color:var(--fg);border:1px solid var(--muted)}
+.grid{display:grid;gap:16px;margin-top:12px;grid-template-columns:repeat(3,minmax(0,1fr))}
+@media (max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 2px 20px rgba(0,0,0,.15)}
+.label{color:var(--muted);font-size:13px}
+.metric{font-size:28px;font-weight:800;margin-top:6px}
+canvas{width:100%;height:320px}
+footer{color:var(--muted);font-size:12px;margin-top:10px}
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Internet Quality Monitor</h1>
+  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem.</p>
+
+  <div class="row">
+    <div id="statusPill" class="pill">Načítám…</div>
+    <div class="actions">
+      <button id="runBtn" class="button">Spustit měření</button>
+      <a class="button" href="/metrics" target="_blank" rel="noopener">Prometheus /metrics</a>
+      <a class="button secondary" href="/api/export.csv">Stáhnout CSV</a>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div class="label">Download</div>
+      <div id="dl" class="metric">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Upload</div>
+      <div id="ul" class="metric">—</div>
+    </div>
+    <div class="card">
+      <div class="label">Ping • Jitter • Loss</div>
+      <div id="lat" class="metric">—</div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px">
+    <div class="label" id="updated">Naposledy: —</div>
+    <canvas id="chart"></canvas>
+  </div>
+
+  <footer>Auto-refresh každých 30 s • Prahy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const qs = new URLSearchParams(location.search);
+const DLOW = Number(qs.get('dlow')||200);
+const ULOW = Number(qs.get('uplow')||200);
+let chart;
+
+function cls(r){
+  if ((r.packet_loss_pct||0) > 5 || (r.download_mbps||0) < 5) return 'bad';
+  if ((r.packet_loss_pct||0) > 1 || (r.jitter_ms||0) > 30 || (r.ping_ms||0) > 80 ||
+      (r.download_mbps||0) < DLOW*0.5 || (r.upload_mbps||0) < ULOW*0.5) return 'warn';
+  return 'ok';
+}
+function fmt(n,u){return (n==null || Number.isNaN(n)) ? '—' : (Number(n).toFixed(1)+' '+u)}
+
+async function load(){
+  const r = await fetch('/api/results?limit=120');
+  const data = await r.json();
+  const arr = data.results || [];
+  if (!arr.length) return;
+
+  const last = arr[arr.length-1];
+  document.getElementById('dl').textContent = fmt(last.download_mbps,'Mb/s');
+  document.getElementById('ul').textContent = fmt(last.upload_mbps,'Mb/s');
+  document.getElementById('lat').textContent =
+    `${fmt(last.ping_ms,'ms')} • ${fmt(last.jitter_ms,'ms')} • ${(last.packet_loss_pct||0).toFixed(2)}%`;
+  document.getElementById('updated').textContent = 'Naposledy: ' + new Date(last.ts).toLocaleString();
+
+  const pill = document.getElementById('statusPill'); const c = cls(last);
+  pill.className = 'pill '+c;
+  pill.textContent = c==='ok' ? 'Stav: OK' : c==='warn' ? 'Stav: Degradace' : 'Stav: Výpadek';
+
+  const labels = arr.map(x => new Date(x.ts).toLocaleTimeString());
+  const dl = arr.map(x => x.download_mbps);
+  const ul = arr.map(x => x.upload_mbps);
+
+  if (!chart){
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: 'Download (Mb/s)', data: dl },
+        { label: 'Upload (Mb/s)', data: ul }
+      ]},
+      options: { animation:false, responsive:true, maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        scales:{ y:{ beginAtZero:true } }
+      }
+    });
+  } else {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = dl;
+    chart.data.datasets[1].data = ul;
+    chart.update();
+  }
+}
+
+document.getElementById('runBtn').onclick = async () => {
+  const b = document.getElementById('runBtn');
+  b.disabled = true; b.textContent = 'Měřím…';
+  try { await fetch('/run-now', {method:'POST'}); await load(); }
+  catch(e){ alert('Měření se nepovedlo: '+e); }
+  finally { b.disabled=false; b.textContent='Spustit měření';}
+};
+
+load(); setInterval(load, 30000);
+</script>
+</body>
+</html>
     """
+
+# --- nový endpoint pro export CSV ---
+@app.get("/api/export.csv")
+def export_csv():
+    try:
+        with open(CSV_PATH, "rb") as f:
+            data = f.read()
+        return Response(
+            data,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=results.csv"},
+        )
+    except FileNotFoundError:
+        return Response(
+            "ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct\n",
+            media_type="text/csv",
+        )
+
 
 
 @app.get("/metrics")
