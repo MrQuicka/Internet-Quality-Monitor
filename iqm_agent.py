@@ -538,33 +538,51 @@ def api_latest():
         "online": latest.get("online", True)
     }
 
+from fastapi import Query  # už importuješ výše
+
 @app.get("/api/history")
-def api_history():
-    """Get measurement history - compatible with dashboard"""
-    period = request.args.get('period', 'day')
-    limit = min(int(request.args.get('limit', 288)), 1000)
-    
-    # Use existing results endpoint
+def api_history(
+    period: str = Query("day", description="hour|day|week|month"),
+    limit: int = Query(288, ge=1, le=1000),
+):
+    """
+    Get measurement history – kompatibilní s dashboardem.
+    period se používá pouze k odhadu rozumného limitu, pokud ho klient neposlal.
+    """
+    # pokud klient neposlal limit, dopočítej rozumný podle INTERVAL_SEC
+    if "limit" not in {p.split("=")[0] for p in str(period).split("&")}:
+        seconds = {
+            "hour": 60*60,
+            "day": 24*60*60,
+            "week": 7*24*60*60,
+            "month": 30*24*60*60
+        }.get(period, 24*60*60)
+        est_points = max(1, int(seconds / max(5, INTERVAL_SEC)))
+        limit = min(est_points, 1000)
+
     arr = list(_recent)[-limit:]
-    
-    # Transform data for dashboard compatibility
+
     data = []
     for item in arr:
         data.append({
-            'ts': item['ts'],
-            'timestamp': item['ts'],  # Dashboard compatibility
-            'ping_ms': item.get('ping_ms'),
-            'ping': item.get('ping_ms'),  # Dashboard compatibility
-            'jitter_ms': item.get('jitter_ms'),
-            'download_mbps': item.get('download_mbps'),
-            'download': item.get('download_mbps'),  # Dashboard compatibility
-            'upload_mbps': item.get('upload_mbps'), 
-            'upload': item.get('upload_mbps'),  # Dashboard compatibility
-            'packet_loss': item.get('packet_loss_pct'),
-            'online': item.get('online', True)
+            "ts": item["ts"],
+            "timestamp": item["ts"],                 # kompatibilita s dashboardem
+            "ping_ms": item.get("ping_ms"),
+            "ping": item.get("ping_ms"),             # kompatibilita s dashboardem
+            "jitter_ms": item.get("jitter_ms"),
+            "download_mbps": item.get("download_mbps"),
+            "download": item.get("download_mbps"),   # kompatibilita s dashboardem
+            "upload_mbps": item.get("upload_mbps"),
+            "upload": item.get("upload_mbps"),       # kompatibilita s dashboardem
+            "packet_loss": item.get("packet_loss_pct"),
+            "online": item.get("online", True),
         })
-    
     return data
+
+@app.post("/api/run")
+def api_run():
+    return run_now()
+
 
 # =========================
 # Zbývající API endpointy
