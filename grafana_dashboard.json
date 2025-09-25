@@ -10,14 +10,14 @@
       "title": "Download (Mb/s)",
       "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
       "targets": [{ "expr": "iqm_download_mbps" }],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
     },
     {
       "type": "stat",
       "title": "Upload (Mb/s)",
       "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
       "targets": [{ "expr": "iqm_upload_mbps" }],
-      "options": { "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
     },
     {
       "type": "stat",
@@ -52,19 +52,41 @@
     },
     {
       "type": "timeseries",
-      "title": "Ping / Jitter / Loss",
+      "title": "Download (raw vs SMA 1h)",
       "gridPos": { "x": 0, "y": 13, "w": 24, "h": 9 },
+      "targets": [
+        { "expr": "iqm_download_mbps", "legendFormat": "download (raw)" },
+        { "expr": "avg_over_time(iqm_download_mbps[1h])", "legendFormat": "SMA 1h" }
+      ],
+      "options": { "legend": { "displayMode": "list", "placement": "right" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "Ping / Jitter / Loss",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 9 },
       "targets": [
         { "expr": "iqm_ping_ms", "legendFormat": "ping" },
         { "expr": "iqm_jitter_ms", "legendFormat": "jitter" },
         { "expr": "iqm_packet_loss_pct", "legendFormat": "loss (%)" }
       ],
       "options": { "legend": { "displayMode": "list", "placement": "right" } }
+    },
+    {
+      "type": "stat",
+      "title": "Download SMA 1h",
+      "gridPos": { "x": 0, "y": 31, "w": 6, "h": 4 },
+      "targets": [{ "expr": "avg_over_time(iqm_download_mbps[1h])" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
+    },
+    {
+      "type": "stat",
+      "title": "Download P10 (24h)",
+      "gridPos": { "x": 6, "y": 31, "w": 6, "h": 4 },
+      "targets": [{ "expr": "quantile_over_time(0.10, iqm_download_mbps[24h])" }],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } }
     }
   ],
-  "templating": {
-    "list": []
-  },
+  "templating": { "list": [] },
   "annotations": { "list": [] },
-  "version": 1
+  "version": 2
 }

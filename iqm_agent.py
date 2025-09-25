@@ -416,6 +416,7 @@ legend{color:var(--muted); padding:0 6px; font-size:12px;}
 .form-row label{display:flex; flex-direction:column; gap:6px; font-size:13px;}
 input[type="text"],input[type="number"],select{padding:8px 10px; border-radius:8px; border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); background:transparent; color:var(--fg)}
 .switch{display:flex; align-items:center; gap:8px;}
+.badge{font-size:12px; color:var(--muted); margin-top:6px;}
 </style>
 </head>
 <body>
@@ -461,7 +462,10 @@ input[type="text"],input[type="number"],select{padding:8px 10px; border-radius:8
       <label>Speedtest server ID
         <input id="serverId" type="number" min="0" step="1" placeholder="(volitelné)">
       </label>
-      <label class="switch">
+      <label>SMA okno (min)
+        <input id="ma" type="number" min="1" step="1" value="60">
+      </label>
+      <label class="switch" style="grid-column:1/-1">
         <input id="enableSt" type="checkbox" checked>
         <span>Použít speedtest (download/upload)</span>
       </label>
@@ -476,6 +480,8 @@ input[type="text"],input[type="number"],select{padding:8px 10px; border-radius:8
     <div class="card">
       <div class="label">Download</div>
       <div id="dl" class="metric">—</div>
+      <div class="badge" id="dlSmaLbl">SMA (60 min): —</div>
+      <div class="badge" id="dlP10Lbl">P10 (rozsah): —</div>
     </div>
     <div class="card">
       <div class="label">Upload</div>
@@ -514,6 +520,26 @@ function cls(r){
   return 'ok';
 }
 function fmt(n,u){return (n==null || Number.isNaN(n)) ? '—' : (Number(n).toFixed(1)+' '+u)}
+function sma(arr, k){
+  k = Math.max(1, k);
+  const out = new Array(arr.length).fill(null);
+  let sum = 0;
+  for (let i=0;i<arr.length;i++){
+    const v = Number(arr[i] ?? 0);
+    sum += v;
+    if (i >= k) sum -= Number(arr[i-k] ?? 0);
+    if (i >= k-1) out[i] = sum / k;
+  }
+  return out;
+}
+function percentile(arr, p){
+  const a = arr.map(Number).filter(x=>Number.isFinite(x)).sort((x,y)=>x-y);
+  if (!a.length) return NaN;
+  const idx = (a.length-1) * p;
+  const lo = Math.floor(idx), hi = Math.ceil(idx);
+  if (lo === hi) return a[lo];
+  return a[lo] + (a[hi]-a[lo]) * (idx-lo);
+}
 
 async function loadCfg(){
   const r = await fetch('/api/config'); const c = await r.json();
@@ -523,9 +549,15 @@ async function loadCfg(){
   document.getElementById('targets').value = c.targets.join(', ');
   document.getElementById('serverId').value = c.server_id || '';
   document.getElementById('enableSt').checked = c.enable_speedtest;
+
+  const savedMa = Number(localStorage.getItem('iqm_ma') || '60');
+  document.getElementById('ma').value = savedMa;
 }
 
 async function saveCfg(){
+  const ma = Number(document.getElementById('ma').value) || 60;
+  localStorage.setItem('iqm_ma', String(ma));
+
   const body = {
     interval_sec: Number(document.getElementById('interval').value),
     ping_count: Number(document.getElementById('pingCount').value),
@@ -538,6 +570,7 @@ async function saveCfg(){
   await r.json();
   document.getElementById('saveInfo').textContent = 'Uloženo ✔';
   setTimeout(()=>document.getElementById('saveInfo').textContent='', 2000);
+  load(); // přepočítej graf se SMA
 }
 
 async function load(){
@@ -568,13 +601,24 @@ async function load(){
   const jitter = arr.map(x => x.jitter_ms);
   const loss = arr.map(x => x.packet_loss_pct);
 
+  // SMA okno (minuty) -> počet vzorků dle intervalu
+  const cfg = await (await fetch('/api/config')).json();
+  const maMin = Number(localStorage.getItem('iqm_ma') || document.getElementById('ma').value || 60);
+  const k = Math.max(1, Math.round((maMin*60) / cfg.interval_sec));
+  const dl_sma = sma(dl, k);
+  const p10 = percentile(dl, 0.10);
+
+  document.getElementById('dlSmaLbl').textContent = `SMA (${maMin} min): ${fmt(dl_sma.at(-1),'Mb/s')}`;
+  document.getElementById('dlP10Lbl').textContent = `P10 (rozsah): ${fmt(p10,'Mb/s')}`;
+
   const el = document.getElementById('chart');
   if (!chart){
     chart = new Chart(el, {
       type: 'line',
       data: { labels, datasets: [
         { label: 'Download (Mb/s)', data: dl },
-        { label: 'Upload (Mb/s)', data: ul }
+        { label: 'Upload (Mb/s)', data: ul },
+        { label: `Download SMA (${maMin} min)`, data: dl_sma, borderDash:[6,4] }
       ]},
       options: { animation:false, responsive:true, maintainAspectRatio:false, resizeDelay:150,
         interaction:{mode:'index',intersect:false},
@@ -585,6 +629,12 @@ async function load(){
     chart.data.labels = labels;
     chart.data.datasets[0].data = dl;
     chart.data.datasets[1].data = ul;
+    if (chart.data.datasets.length < 3) {
+      chart.data.datasets.push({ label:`Download SMA (${maMin} min)`, data: dl_sma, borderDash:[6,4] });
+    } else {
+      chart.data.datasets[2].label = `Download SMA (${maMin} min)`;
+      chart.data.datasets[2].data = dl_sma;
+    }
     chart.update('none');
   }
 
@@ -685,7 +735,6 @@ def export_csv(
     to: Optional[str] = Query(None),
 ):
     """Export CSV v daném časovém intervalu. Parametry jako /api/results_range."""
-    # Výchozí rozsah = posledních 24h
     if last:
         dt_to = datetime.now(timezone.utc)
         dt_from = dt_to - _parse_last(last)
@@ -716,7 +765,6 @@ def export_csv(
                     except Exception:
                         pass
 
-    # serialize CSV do bytu
     from io import StringIO
     buf = StringIO()
     cw = csv.writer(buf)
