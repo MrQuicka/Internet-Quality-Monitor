@@ -525,7 +525,109 @@ def homer_service_status():
 # =========================
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
-    return "<html><body><h1>Internet Quality Monitor</h1><p>API běží na portu 5001</p><p><a href='/api/homer-status'>Homer Status</a> • <a href='/metrics'>Prometheus</a></p></body></html>"
+    try:
+        # Zkus načíst dashboard.html soubor
+        dashboard_path = "/app/dashboard.html"
+        if os.path.exists(dashboard_path):
+            with open(dashboard_path, "r", encoding="utf-8") as f:
+                return f.read()
+    except Exception:
+        pass
+    
+    # Fallback - jednoduchá stránka s odkazy
+    return """
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Internet Quality Monitor</title>
+    <style>
+        body { font-family: system-ui; background: #1a1a1a; color: white; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { color: #6aa6ff; }
+        .card { background: #2a2a2a; padding: 20px; border-radius: 10px; margin: 10px 0; }
+        .btn { display: inline-block; background: #6aa6ff; color: white; padding: 10px 20px; 
+               text-decoration: none; border-radius: 5px; margin: 5px; }
+        .status { font-size: 18px; margin: 10px 0; }
+        #status { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🌐 Internet Quality Monitor</h1>
+        <div class="card">
+            <h2>API Status</h2>
+            <div class="status">Status: <span id="status">Checking...</span></div>
+            <div class="status">Posledních testů: <span id="count">-</span></div>
+        </div>
+        
+        <div class="card">
+            <h2>🔗 API Endpointy</h2>
+            <a href="/api/homer-status" class="btn">Homer Status</a>
+            <a href="/api/homer-service-status" class="btn">Service Status</a>
+            <a href="/metrics" class="btn">Prometheus Metrics</a>
+            <a href="/health" class="btn">Health Check</a>
+            <a href="/api/results?limit=10" class="btn">Recent Results</a>
+        </div>
+        
+        <div class="card">
+            <h2>⚙️ Actions</h2>
+            <button onclick="runTest()" class="btn">🚀 Spustit test</button>
+            <span id="testResult" style="margin-left: 10px;"></span>
+        </div>
+        
+        <div class="card">
+            <h2>📊 Homer Integration</h2>
+            <p>Pro integraci s Homer dashboard použij tyto endpointy:</p>
+            <ul>
+                <li><strong>Message widget:</strong> <code>http://192.168.0.208:5001/api/homer-status</code></li>
+                <li><strong>Service status:</strong> <code>http://192.168.0.208:5001/api/homer-service-status</code></li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+    async function checkStatus() {
+        try {
+            const response = await fetch('/api/results?limit=5');
+            const data = await response.json();
+            document.getElementById('status').textContent = '✅ Online';
+            document.getElementById('count').textContent = data.results ? data.results.length : 0;
+        } catch (e) {
+            document.getElementById('status').textContent = '❌ Error';
+        }
+    }
+    
+    async function runTest() {
+        const btn = event.target;
+        const result = document.getElementById('testResult');
+        btn.disabled = true;
+        btn.textContent = '⏳ Měřím...';
+        result.textContent = 'Může trvat až 60 sekund...';
+        
+        try {
+            const response = await fetch('/api/run-now', { method: 'POST' });
+            const data = await response.json();
+            result.textContent = data.status === 'ok' ? '✅ Test dokončen' : '❌ Test selhal';
+            checkStatus();
+        } catch (e) {
+            result.textContent = '❌ Chyba: ' + e.message;
+        } finally {
+            setTimeout(() => {
+                btn.disabled = false;
+                btn.textContent = '🚀 Spustit test';
+                result.textContent = '';
+            }, 3000);
+        }
+    }
+    
+    checkStatus();
+    setInterval(checkStatus, 30000);
+    </script>
+</body>
+</html>
+    """
 
 @app.get("/metrics")
 def metrics():
