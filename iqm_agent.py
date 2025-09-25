@@ -25,13 +25,12 @@ from prometheus_client import (
 )
 import uvicorn
 
-
 # =========================
-# Konfigurace z ENV proměnných (s rozumnými defaulty)
+# Konfigurace (ENV s defaulty)
 # =========================
 TZ = os.getenv("TZ", "Europe/Prague")
-INTERVAL_SEC = int(os.getenv("IQM_INTERVAL_SEC", "300"))  # perioda měření
-WARMUP_RUNS = int(os.getenv("IQM_WARMUP_RUNS", "1"))  # počet warm-up běhů (ignorují se)
+INTERVAL_SEC = int(os.getenv("IQM_INTERVAL_SEC", "300"))
+WARMUP_RUNS = int(os.getenv("IQM_WARMUP_RUNS", "1"))
 RETRY_MAX = int(os.getenv("IQM_RETRY_MAX", "3"))
 CSV_PATH = os.getenv("IQM_CSV_PATH", "/app/data/results.csv")
 SQLITE_PATH = os.getenv("IQM_SQLITE_PATH", "/app/data/results.sqlite")
@@ -40,13 +39,12 @@ TARGETS = [t.strip() for t in os.getenv("IQM_TARGETS", "8.8.8.8,1.1.1.1").split(
 BIND = os.getenv("IQM_BIND", "0.0.0.0")
 PORT = int(os.getenv("IQM_PORT", "5001"))
 
-# Preferujeme oficiální Ookla CLI binárku; fallback je python speedtest-cli
+# Preferujeme Ookla CLI; fallback je python speedtest-cli (HTTPS)
 SPEEDTEST_BIN = os.getenv("IQM_SPEEDTEST_BIN", "speedtest")
-# Volitelné extra parametry pro Ookla CLI (např. "--server-id 12345")
 SPEEDTEST_EXTRA = shlex.split(os.getenv("IQM_SPEEDTEST_ARGS", ""))
 
 # =========================
-# Prometheus registry a metriky
+# Prometheus metriky
 # =========================
 registry = CollectorRegistry()
 runs_total = Counter("iqm_runs_total", "Počet spuštění měření", registry=registry)
@@ -60,12 +58,11 @@ duration_h = Histogram(
     "iqm_run_duration_seconds",
     "Délka běhu měření (s)",
     registry=registry,
-    # jednoduché bucketování, ať jsou vidět i rychlé/krátké běhy
     buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 120, 240),
 )
 
 # =========================
-# Aplikace a in-memory cache posledních výsledků
+# Aplikace + cache posledních výsledků
 # =========================
 app = FastAPI(title="Internet Quality Monitor")
 app.add_middleware(
@@ -76,9 +73,8 @@ app.add_middleware(
 )
 _recent: deque[Dict[str, Any]] = deque(maxlen=500)
 
-
 # =========================
-# Pomocné funkce pro perzistenci
+# Perzistence
 # =========================
 def ensure_csv_header() -> None:
     os.makedirs(os.path.dirname(CSV_PATH), exist_ok=True)
@@ -91,7 +87,8 @@ def ensure_csv_header() -> None:
 def init_sqlite() -> None:
     if not USE_SQLITE:
         return
-    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
+    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True
+               )
     with sqlite3.connect(SQLITE_PATH) as conn:
         conn.execute(
             """
@@ -106,18 +103,16 @@ def init_sqlite() -> None:
             """
         )
 
-
 # =========================
-# Měření rychlosti – Ookla CLI s tichým souhlasem; fallback speedtest-cli (HTTPS)
+# Speedtest
 # =========================
 def run_speedtest() -> Dict[str, float]:
     """
     Vrátí dict s download/upload (Mb/s) a ping (ms).
-    1) Preferuje oficiální Ookla CLI (binárka `speedtest`), se silent consent přepínači.
-    2) Fallback: python speedtest-cli s secure=True (HTTPS), což často řeší 403 od CF.
+    1) Preferuje oficiální Ookla CLI (binárka `speedtest`) s tichým souhlasem.
+    2) Fallback: python speedtest-cli s secure=True (HTTPS) – řeší časté 403.
     """
     try:
-        # Ookla CLI s JSON výstupem + tichý souhlas s licencí/GDPR
         cmd = [SPEEDTEST_BIN, "--format=json", "--progress=no", "--accept-license", "--accept-gdpr", *SPEEDTEST_EXTRA]
         out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=240)
         data = json.loads(out.decode("utf-8", errors="ignore"))
@@ -125,7 +120,6 @@ def run_speedtest() -> Dict[str, float]:
         up = data.get("upload", {}).get("bandwidth")
         ping = data.get("ping", {}).get("latency")
 
-        # bandwidth je v bajtech/s → *8/1e6 => Mb/s
         down_mbps = (down * 8 / 1e6) if isinstance(down, (int, float)) else None
         up_mbps = (up * 8 / 1e6) if isinstance(up, (int, float)) else None
         ping_ms = float(ping) if isinstance(ping, (int, float)) else None
@@ -135,27 +129,23 @@ def run_speedtest() -> Dict[str, float]:
         return {"download_mbps": down_mbps, "upload_mbps": up_mbps, "ping_ms": ping_ms}
 
     except Exception as cli_err:
-        # Fallback – python speedtest-cli
         try:
             import speedtest  # type: ignore
-
-            s = speedtest.Speedtest(secure=True)  # HTTPS (pomáhá proti 403)
+            s = speedtest.Speedtest(secure=True)
             s.get_best_server()
-            down = s.download() / 1e6  # b/s → Mb/s
+            down = s.download() / 1e6
             up = s.upload() / 1e6
             ping = float(s.results.ping)
             return {"download_mbps": down, "upload_mbps": up, "ping_ms": ping}
         except Exception as e:
             raise RuntimeError(f"Speedtest failed: {e}") from cli_err
 
-
 # =========================
-# Ping/jitter/packet loss
+# Ping / jitter / loss
 # =========================
 def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
     """
-    Vrátí loss (%) a jitter (ms) pro daný target, pomocí systémového 'ping'.
-    Používáme: ping -n -c {count} -i 0.2 target
+    Vrátí loss (%) a jitter (ms) pro daný target pomocí systémového 'ping'.
     """
     out = subprocess.check_output(
         ["ping", "-n", "-c", str(count), "-i", "0.2", target],
@@ -170,9 +160,8 @@ def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
 
     for line in out.splitlines():
         line = line.strip()
-        # řádky s time=
+
         if " time=" in line:
-            # formáty: "... time=7.12 ms"
             try:
                 after = line.split(" time=")[1]
                 val = after.split(" ")[0].strip()
@@ -182,14 +171,10 @@ def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
             except Exception:
                 pass
 
-        # závěrečné statistiky (locale-safe přístup – hledáme substrings)
         if "packets transmitted" in line and "received" in line:
-            # např.: "10 packets transmitted, 10 received, 0% packet loss, time 2003ms"
             try:
                 parts = line.replace("%", "").split(",")
-                # "10 packets transmitted"
                 tx = int(parts[0].split()[0])
-                # " 10 received"
                 rx = int(parts[1].split()[0])
                 loss_pct = (100.0 * (tx - rx) / tx) if tx > 0 else 100.0
             except Exception:
@@ -211,18 +196,13 @@ def aggregate_ping(targets: List[str]) -> Dict[str, float]:
             losses.append(100.0)
             jitters.append(float("nan"))
 
-    # robustnější metrika: medián, NaN ignorujeme
     jitter_vals = [j for j in jitters if not math.isnan(j)]
-    if jitter_vals:
-        jitter = statistics.median(jitter_vals)
-    else:
-        jitter = 0.0
+    jitter = statistics.median(jitter_vals) if jitter_vals else 0.0
     loss = statistics.median(losses) if losses else 100.0
     return {"jitter_ms": float(jitter), "loss_pct": float(loss)}
 
-
 # =========================
-# Jeden běh měření (s retries + backoff + jitter)
+# Jedno měření (s retries)
 # =========================
 def measure_once() -> Dict[str, Any]:
     attempt, backoff = 0, 1.5
@@ -231,9 +211,7 @@ def measure_once() -> Dict[str, Any]:
     while attempt <= RETRY_MAX:
         try:
             t0 = time.perf_counter()
-            # speedtest (download/upload/ping)
             st = run_speedtest()
-            # ping/jitter/loss – agregace přes více targetů
             pp = aggregate_ping(TARGETS)
 
             now = datetime.now(timezone.utc).isoformat()
@@ -246,7 +224,6 @@ def measure_once() -> Dict[str, Any]:
                 "packet_loss_pct": float(pp["loss_pct"]),
             }
 
-            # aktualizace metrik
             dt = time.perf_counter() - t0
             update_metrics(res, dt)
             return res
@@ -256,27 +233,23 @@ def measure_once() -> Dict[str, Any]:
             attempt += 1
             if attempt > RETRY_MAX:
                 break
-            # exponenciální backoff + malý jitter
             time.sleep(backoff + (0.2 * attempt))
             backoff *= 2
 
     raise RuntimeError(f"Measurement failed after retries: {last_err}")
 
-
 def persist(res: Dict[str, Any]) -> None:
     ensure_csv_header()
     with open(CSV_PATH, "a", newline="") as f:
         w = csv.writer(f)
-        w.writerow(
-            [
-                res["ts"],
-                res["download_mbps"],
-                res["upload_mbps"],
-                res["ping_ms"],
-                res["jitter_ms"],
-                res["packet_loss_pct"],
-            ]
-        )
+        w.writerow([
+            res["ts"],
+            res["download_mbps"],
+            res["upload_mbps"],
+            res["ping_ms"],
+            res["jitter_ms"],
+            res["packet_loss_pct"],
+        ])
 
     if USE_SQLITE:
         with sqlite3.connect(SQLITE_PATH) as conn:
@@ -296,7 +269,6 @@ def persist(res: Dict[str, Any]) -> None:
                 ),
             )
 
-
 def update_metrics(res: Dict[str, Any], duration_s: float) -> None:
     download_g.set(res["download_mbps"])
     upload_g.set(res["upload_mbps"])
@@ -306,9 +278,8 @@ def update_metrics(res: Dict[str, Any], duration_s: float) -> None:
     duration_h.observe(duration_s)
     runs_total.inc()
 
-
 def loop() -> None:
-    # Warm-up běhy – ignorujeme výsledky
+    # Warm-up
     for _ in range(WARMUP_RUNS):
         try:
             _ = measure_once()
@@ -316,7 +287,6 @@ def loop() -> None:
             pass
         time.sleep(2)
 
-    # Hlavní smyčka
     while True:
         try:
             res = measure_once()
@@ -326,9 +296,8 @@ def loop() -> None:
             errors_total.inc()
         time.sleep(INTERVAL_SEC)
 
-
 # =========================
-# FastAPI endpointy
+# UI + API
 # =========================
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
@@ -360,15 +329,18 @@ h1{margin:0 0 8px;font-size:32px}
 .button.secondary{background:transparent;color:var(--fg);border:1px solid var(--muted)}
 .grid{display:grid;gap:16px;margin-top:12px;grid-template-columns:repeat(3,minmax(0,1fr))}
 @media (max-width:900px){.grid{grid-template-columns:1fr}}
-}
 .card{background:var(--card);border-radius:16px;padding:18px;box-shadow:0 2px 20px rgba(0,0,0,.15)}
 .label{color:var(--muted);font-size:13px}
 .metric{font-size:28px;font-weight:800;margin-top:6px}
-.chart-box{position:relative;height:360px}            /* fixed chart height */
-footer{color:var(--muted);font-size:12px;margin-top:10px}
+/* Fix nafukování grafu: wrapper s pevnou výškou + canvas 100% */
+.chart-box{position:relative; height:360px;}
+.chart-box canvas{
+  position:absolute; inset:0;
+  width:100% !important; height:100% !important;
+  display:block;
 }
+footer{color:var(--muted);font-size:12px;margin-top:10px}
 </style>
-</head>
 </head>
 <body>
 <div class="container">
@@ -399,14 +371,13 @@ footer{color:var(--muted);font-size:12px;margin-top:10px}
     </div>
   </div>
 
-  <div class="card" style="margin-top:16px">
+  <div class="card" style="margin-top:16px; overflow:hidden">
     <div class="label" id="updated">Naposledy: —</div>
-    <canvas id="chart"></canvas>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
   </div>
 
   <footer>Auto-refresh každých 30 s • Prahy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
 </div>
-}
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
@@ -444,14 +415,15 @@ async function load(){
   const dl = arr.map(x => x.download_mbps);
   const ul = arr.map(x => x.upload_mbps);
 
+  const el = document.getElementById('chart');
   if (!chart){
-    chart = new Chart(document.getElementById('chart'), {
+    chart = new Chart(el, {
       type: 'line',
       data: { labels, datasets: [
         { label: 'Download (Mb/s)', data: dl },
         { label: 'Upload (Mb/s)', data: ul }
       ]},
-      options: { animation:false, responsive:true, maintainAspectRatio:false,
+      options: { animation:false, responsive:true, maintainAspectRatio:false, resizeDelay:150,
         interaction:{mode:'index',intersect:false},
         scales:{ y:{ beginAtZero:true } }
       }
@@ -460,7 +432,7 @@ async function load(){
     chart.data.labels = labels;
     chart.data.datasets[0].data = dl;
     chart.data.datasets[1].data = ul;
-    chart.update();
+    chart.update('none');
   }
 }
 
@@ -478,7 +450,15 @@ load(); setInterval(load, 30000);
 </html>
     """
 
-# --- nový endpoint pro export CSV ---
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
+
+@app.get("/api/results")
+def recent(limit: int = 50):
+    arr = list(_recent)[-limit:]
+    return {"results": arr}
+
 @app.get("/api/export.csv")
 def export_csv():
     try:
@@ -495,19 +475,6 @@ def export_csv():
             media_type="text/csv",
         )
 
-
-
-@app.get("/metrics")
-def metrics():
-    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
-
-
-@app.get("/api/results")
-def recent(limit: int = 50):
-    arr = list(_recent)[-limit:]
-    return {"results": arr}
-
-
 @app.get("/health")
 def health():
     try:
@@ -516,33 +483,23 @@ def health():
     except Exception:
         return {"status": "degraded"}
 
-
 @app.post("/run-now")
 def run_now():
-    """
-    Spustí okamžité měření (užitečné pro testování, CI, validaci nasazení).
-    """
-    t0 = time.perf_counter()
+    """Spuštění měření okamžitě."""
     res = measure_once()
     persist(res)
-    dt = time.perf_counter() - t0
     _recent.append(res)
-    return JSONResponse({"status": "ok", "duration_s": round(dt, 2), "result": res})
-
+    return JSONResponse({"status": "ok", "result": res})
 
 # =========================
 # Hlavní spouštěč
 # =========================
 if __name__ == "__main__":
-    # Init CSV/SQLite
     ensure_csv_header()
     init_sqlite()
 
-    # Měřící smyčka ve vlákně
     import threading
-
     th = threading.Thread(target=loop, daemon=True)
     th.start()
 
-    # HTTP server
     uvicorn.run(app, host=BIND, port=PORT)
