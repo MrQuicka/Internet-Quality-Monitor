@@ -290,6 +290,7 @@ def measure_once() -> Dict[str, Any]:
                 "ping_ms": float(st["ping_ms"] if ENABLE_SPEEDTEST else pp["rtt_ms"]),
                 "jitter_ms": float(pp["jitter_ms"]),
                 "packet_loss_pct": float(pp["loss_pct"]),
+                "online": True  # Pokud jsme se dostali sem, jsme online
             }
 
             dt = time.perf_counter() - t0
@@ -304,7 +305,19 @@ def measure_once() -> Dict[str, Any]:
             time.sleep(backoff + (0.2 * attempt))
             backoff *= 2
 
-    raise RuntimeError(f"Measurement failed after retries: {last_err}")
+    # Pokud všechny pokusy selhaly, vrátíme offline stav
+    now = datetime.now(timezone.utc).isoformat()
+    offline_res = {
+        "ts": now,
+        "download_mbps": 0.0,
+        "upload_mbps": 0.0,
+        "ping_ms": 0.0,
+        "jitter_ms": 0.0,
+        "packet_loss_pct": 100.0,
+        "online": False
+    }
+    errors_total.inc()
+    return offline_res
 
 def persist(res: Dict[str, Any]) -> None:
     ensure_csv_header()
@@ -369,6 +382,152 @@ def loop() -> None:
 # =========================
 # UI + API
 # =========================
+# ===== NOVÉ HOMER API ENDPOINTY =====
+
+@app.get("/api/homer-status")
+def homer_status():
+    """Endpoint pro Homer message widget s aktuálním stavem připojení"""
+    try:
+        # Získej nejnovější data
+        latest = list(_recent)[-1] if _recent else None
+        
+        if not latest:
+            return {
+                "title": "🔄 Internet Monitor",
+                "content": "Žádná data k dispozici - spouštím první měření...",
+                "style": "is-light"
+            }
+        
+        # Vyhodnocení stavu
+        ping = latest.get('ping_ms', 0)
+        download = latest.get('download_mbps', 0) 
+        upload = latest.get('upload_mbps', 0)
+        loss = latest.get('packet_loss_pct', 0)
+        online = latest.get('online', True)
+        jitter = latest.get('jitter_ms', 0)
+        
+        # Formatování hodnot
+        ping_str = f"{ping:.1f}" if ping and ping > 0 else "--"
+        download_str = f"{download:.1f}" if download and download > 0 else "--"
+        upload_str = f"{upload:.1f}" if upload and upload > 0 else "--"
+        loss_str = f"{loss:.1f}" if loss and loss > 0 else "0.0"
+        jitter_str = f"{jitter:.1f}" if jitter and jitter > 0 else "--"
+        
+        # Určení stylu a zprávy
+        if not online:
+            return {
+                "title": "❌ Internet je offline",
+                "content": "Připojení k internetu není k dispozici",
+                "style": "is-danger"
+            }
+        
+        # Kontrola kritických problémů
+        if (loss and loss > 5) or (download and download < 50) or (ping and ping > 100):
+            return {
+                "title": "🚨 Kritické problémy s připojením",
+                "content": f"📥 {download_str} Mbps • 📤 {upload_str} Mbps • 📡 {ping_str} ms • 📦 {loss_str}% ztráta • ⚡ {jitter_str} ms jitter",
+                "style": "is-danger"
+            }
+        
+        # Kontrola degradace
+        elif (loss and loss > 1) or (download and download < 200) or (ping and ping > 50) or (jitter and jitter > 20):
+            quality_issues = []
+            if loss and loss > 1: quality_issues.append(f"ztráty {loss_str}%")
+            if download and download < 200: quality_issues.append(f"pomalý DL")
+            if ping and ping > 50: quality_issues.append(f"vysoký ping")
+            if jitter and jitter > 20: quality_issues.append(f"vysoký jitter")
+            
+            issues_text = " • ".join(quality_issues) if quality_issues else ""
+            return {
+                "title": f"⚠️ Zhoršená kvalita připojení" + (f" ({issues_text})" if issues_text else ""),
+                "content": f"📥 {download_str} Mbps • 📤 {upload_str} Mbps • 📡 {ping_str} ms • 📦 {loss_str}% • ⚡ {jitter_str} ms",
+                "style": "is-warning"
+            }
+        
+        # Vše v pořádku
+        else:
+            # Určení kvality podle rychlosti
+            if download and download >= 500:
+                quality = "Vynikající"
+                emoji = "🚀"
+            elif download and download >= 300:
+                quality = "Výborná"
+                emoji = "✨"
+            else:
+                quality = "Dobrá"
+                emoji = "✅"
+                
+            return {
+                "title": f"{emoji} Internet funguje skvěle",
+                "content": f"📥 {download_str} Mbps • 📤 {upload_str} Mbps • 📡 {ping_str} ms • Kvalita: {quality}",
+                "style": "is-success"
+            }
+            
+    except Exception as e:
+        return {
+            "title": "❌ Chyba monitoru",
+            "content": f"Nepodařilo se načíst stav připojení: {str(e)}",
+            "style": "is-danger"
+        }
+
+@app.get("/api/homer-service-status")
+def homer_service_status():
+    """Endpoint pro dynamickou aktualizaci subtitle Internet Monitor služby"""
+    try:
+        latest = list(_recent)[-1] if _recent else None
+        
+        if not latest:
+            return {
+                "status": "loading",
+                "subtitle": "🔄 Načítám...",
+                "emoji": "🔄"
+            }
+        
+        ping = latest.get('ping_ms', 0)
+        download = latest.get('download_mbps', 0) 
+        upload = latest.get('upload_mbps', 0)
+        loss = latest.get('packet_loss_pct', 0)
+        online = latest.get('online', True)
+        
+        # Formatování hodnot pro kompaktní zobrazení
+        dl = f"{download:.0f}" if download and download > 0 else "--"
+        ul = f"{upload:.0f}" if upload and upload > 0 else "--"
+        ping_val = f"{ping:.0f}ms" if ping and ping > 0 else "--"
+        
+        if not online:
+            return {
+                "status": "offline",
+                "subtitle": "🔴 Offline",
+                "emoji": "🔴"
+            }
+        elif (loss and loss > 5) or (download and download < 50) or (ping and ping > 100):
+            return {
+                "status": "critical",
+                "subtitle": f"🔴 Problémy • ↓{dl} ↑{ul} Mbps • {ping_val}",
+                "emoji": "🔴"
+            }
+        elif (loss and loss > 1) or (download and download < 200) or (ping and ping > 50):
+            return {
+                "status": "warning", 
+                "subtitle": f"🟡 Degradace • ↓{dl} ↑{ul} Mbps • {ping_val}",
+                "emoji": "🟡"
+            }
+        else:
+            return {
+                "status": "ok",
+                "subtitle": f"🟢 V pořádku • ↓{dl} ↑{ul} Mbps • {ping_val}",
+                "emoji": "🟢"
+            }
+            
+    except Exception:
+        return {
+            "status": "error",
+            "subtitle": "❌ Chyba monitoru",
+            "emoji": "❌"
+        }
+
+# ===== PŮVODNÍ UI + API =====
+
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
     return """
@@ -588,7 +747,7 @@ async function load(){
   document.getElementById('ul').textContent = fmt(last.upload_mbps,'Mb/s');
   document.getElementById('lat').textContent =
     `${fmt(last.ping_ms,'ms')} • ${fmt(last.jitter_ms,'ms')} • ${(last.packet_loss_pct||0).toFixed(2)}%`;
-  document.getElementById('updated').textContent = 'Naposledy: ' + new Date(last.ts).toLocaleString();
+  document.getElementById('updated').textContent = 'Naposledy: ' + new Date(last.ts).toLocaleString('cs-CZ');
 
   const pill = document.getElementById('statusPill'); const c = cls(last);
   pill.className = 'pill '+c;
@@ -677,176 +836,3 @@ load(); setInterval(load, 30000);
 </body>
 </html>
     """
-
-@app.get("/metrics")
-def metrics():
-    return Response(generate_latest(registry), media_type=CONTENT_TYPE_LATEST)
-
-@app.get("/api/results")
-def recent(limit: int = 50):
-    arr = list(_recent)[-limit:]
-    return {"results": arr}
-
-@app.get("/api/results_range")
-def results_range(
-    last: Optional[str] = Query(None, description="např. 2h, 24h, 7d, 30d"),
-    frm: Optional[str] = Query(None, description="ISO 8601"),
-    to: Optional[str] = Query(None, description="ISO 8601"),
-    limit: int = Query(5000, ge=1, le=200000),
-):
-    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu (nebo za poslední 'last')."""
-    if last:
-        dt_to = datetime.now(timezone.utc)
-        dt_from = dt_to - _parse_last(last)
-    else:
-        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
-        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
-
-    out: List[Dict[str, Any]] = []
-    if USE_SQLITE and os.path.exists(SQLITE_PATH):
-        with sqlite3.connect(SQLITE_PATH) as conn:
-            cur = conn.execute(
-                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
-                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC LIMIT ?",
-                (dt_from.isoformat(), dt_to.isoformat(), limit),
-            )
-            for ts, d, u, p, j, l in cur.fetchall():
-                out.append({"ts": ts, "download_mbps": d, "upload_mbps": u, "ping_ms": p, "jitter_ms": j, "packet_loss_pct": l})
-    else:
-        if os.path.exists(CSV_PATH):
-            with open(CSV_PATH, "r") as f:
-                r = csv.reader(f)
-                header = next(r, None)
-                for row in r:
-                    try:
-                        ts = datetime.fromisoformat(row[0])
-                        if dt_from <= ts <= dt_to:
-                            out.append(_row_to_obj(row))
-                            if len(out) >= limit:
-                                break
-                    except Exception:
-                        pass
-    return {"results": out}
-
-@app.get("/api/export.csv")
-def export_csv(
-    last: Optional[str] = Query(None),
-    frm: Optional[str] = Query(None),
-    to: Optional[str] = Query(None),
-):
-    """Export CSV v daném časovém intervalu. Parametry jako /api/results_range."""
-    if last:
-        dt_to = datetime.now(timezone.utc)
-        dt_from = dt_to - _parse_last(last)
-    else:
-        dt_from = _parse_iso(frm) if frm else datetime.now(timezone.utc) - timedelta(hours=24)
-        dt_to = _parse_iso(to) if to else datetime.now(timezone.utc)
-
-    rows: List[List[str]] = [["ts","download_mbps","upload_mbps","ping_ms","jitter_ms","packet_loss_pct"]]
-    if USE_SQLITE and os.path.exists(SQLITE_PATH):
-        with sqlite3.connect(SQLITE_PATH) as conn:
-            cur = conn.execute(
-                "SELECT ts,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct "
-                "FROM results WHERE ts>=? AND ts<=? ORDER BY ts ASC",
-                (dt_from.isoformat(), dt_to.isoformat()),
-            )
-            for ts, d, u, p, j, l in cur.fetchall():
-                rows.append([ts, str(d), str(u), str(p), str(j), str(l)])
-    else:
-        if os.path.exists(CSV_PATH):
-            with open(CSV_PATH, "r") as f:
-                r = csv.reader(f)
-                header = next(r, None)
-                for row in r:
-                    try:
-                        ts = datetime.fromisoformat(row[0])
-                        if dt_from <= ts <= dt_to:
-                            rows.append(row)
-                    except Exception:
-                        pass
-
-    from io import StringIO
-    buf = StringIO()
-    cw = csv.writer(buf)
-    cw.writerows(rows)
-    data = buf.getvalue().encode("utf-8")
-    filename = f"results_{dt_from.date()}_{dt_to.date()}.csv"
-    return Response(data, media_type="text/csv", headers={"Content-Disposition": f"attachment; filename={filename}"})
-
-@app.get("/api/config")
-def get_config():
-    return {
-        "interval_sec": INTERVAL_SEC,
-        "ping_count": PING_COUNT,
-        "ping_interval_s": PING_INTERVAL_S,
-        "targets": TARGETS,
-        "server_id": _extract_server_id(SPEEDTEST_EXTRA),
-        "enable_speedtest": ENABLE_SPEEDTEST,
-        "retention_days": RETENTION_DAYS,
-    }
-
-def _extract_server_id(extra: List[str]) -> Optional[int]:
-    if "--server-id" in extra:
-        try:
-            idx = extra.index("--server-id")
-            return int(extra[idx+1])
-        except Exception:
-            return None
-    return None
-
-@app.post("/api/config")
-def set_config(payload: Dict[str, Any] = Body(...)):
-    global INTERVAL_SEC, PING_COUNT, PING_INTERVAL_S, TARGETS, SPEEDTEST_EXTRA, ENABLE_SPEEDTEST
-    if "interval_sec" in payload:
-        INTERVAL_SEC = max(5, int(payload["interval_sec"]))
-    if "ping_count" in payload:
-        PING_COUNT = max(1, min(50, int(payload["ping_count"])))
-    if "ping_interval_s" in payload:
-        PING_INTERVAL_S = max(0.01, float(payload["ping_interval_s"]))
-    if "targets" in payload and isinstance(payload["targets"], list):
-        TARGETS = [str(t).strip() for t in payload["targets"] if str(t).strip()]
-    if "enable_speedtest" in payload:
-        ENABLE_SPEEDTEST = bool(payload["enable_speedtest"])
-    if "server_id" in payload:
-        sid = payload["server_id"]
-        if sid is None or int(sid) <= 0:
-            SPEEDTEST_EXTRA = [x for x in SPEEDTEST_EXTRA if x != "--server-id" and not x.isdigit()]
-        else:
-            cleaned = []
-            skip_next = False
-            for x in SPEEDTEST_EXTRA:
-                if skip_next: skip_next = False; continue
-                if x == "--server-id": skip_next = True; continue
-                cleaned.append(x)
-            SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
-    return get_config()
-
-@app.get("/health")
-def health():
-    try:
-        socket.gethostbyname("google.com")
-        return {"status": "ok"}
-    except Exception:
-        return {"status": "degraded"}
-
-@app.post("/run-now")
-def run_now():
-    """Spuštění měření okamžitě."""
-    res = measure_once()
-    persist(res)
-    prune_old_data()
-    _recent.append(res)
-    return JSONResponse({"status": "ok", "result": res})
-
-# =========================
-# Hlavní spouštěč
-# =========================
-if __name__ == "__main__":
-    ensure_csv_header()
-    init_sqlite()
-
-    import threading
-    th = threading.Thread(target=loop, daemon=True)
-    th.start()
-
-    uvicorn.run(app, host=BIND, port=PORT)
