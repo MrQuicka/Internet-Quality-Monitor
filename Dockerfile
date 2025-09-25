@@ -19,3 +19,4 @@ COPY . .
 
 # Run the application
 CMD ["python", "-u", "monitor.py"]
+

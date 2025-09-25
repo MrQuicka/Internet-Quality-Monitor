@@ -1,0 +1,20 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "panels": [
+    { "type": "timeseries", "title": "Download (Mb/s)",
+      "targets": [{ "expr": "iqm_download_mbps", "legendFormat": "download" }] },
+    { "type": "timeseries", "title": "Upload (Mb/s)",
+      "targets": [{ "expr": "iqm_upload_mbps", "legendFormat": "upload" }] },
+    { "type": "timeseries", "title": "Ping (ms)",
+      "targets": [{ "expr": "iqm_ping_ms", "legendFormat": "ping" }] },
+    { "type": "timeseries", "title": "Jitter (ms)",
+      "targets": [{ "expr": "iqm_jitter_ms", "legendFormat": "jitter" }] },
+    { "type": "timeseries", "title": "Packet loss (%)",
+      "targets": [{ "expr": "iqm_packet_loss_pct", "legendFormat": "loss" }] }
+  ],
+  "schemaVersion": 38,
+  "title": "Internet Quality Monitor",
+  "timezone": "browser",
+  "version": 1
+}
