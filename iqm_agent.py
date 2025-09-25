@@ -9,10 +9,10 @@ import statistics
 import subprocess
 import shlex
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Response, Body
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from prometheus_client import (
@@ -35,13 +35,19 @@ RETRY_MAX = int(os.getenv("IQM_RETRY_MAX", "3"))
 CSV_PATH = os.getenv("IQM_CSV_PATH", "/app/data/results.csv")
 SQLITE_PATH = os.getenv("IQM_SQLITE_PATH", "/app/data/results.sqlite")
 USE_SQLITE = os.getenv("IQM_USE_SQLITE", "0") == "1"
+RETENTION_DAYS = int(os.getenv("IQM_RETENTION_DAYS", "90"))
+
 TARGETS = [t.strip() for t in os.getenv("IQM_TARGETS", "8.8.8.8,1.1.1.1").split(",") if t.strip()]
+PING_COUNT = int(os.getenv("IQM_PING_COUNT", "10"))
+PING_INTERVAL_S = float(os.getenv("IQM_PING_INTERVAL_S", "0.2"))
+
 BIND = os.getenv("IQM_BIND", "0.0.0.0")
 PORT = int(os.getenv("IQM_PORT", "5001"))
 
 # Preferujeme Ookla CLI; fallback je python speedtest-cli (HTTPS)
 SPEEDTEST_BIN = os.getenv("IQM_SPEEDTEST_BIN", "speedtest")
 SPEEDTEST_EXTRA = shlex.split(os.getenv("IQM_SPEEDTEST_ARGS", ""))
+ENABLE_SPEEDTEST = os.getenv("IQM_ENABLE_SPEEDTEST", "1") == "1"
 
 # =========================
 # Prometheus metriky
@@ -60,6 +66,7 @@ duration_h = Histogram(
     registry=registry,
     buckets=(0.5, 1, 2, 5, 10, 20, 30, 60, 120, 240),
 )
+speedtest_enabled_g = Gauge("iqm_speedtest_enabled", "1 pokud je povolen speedtest, jinak 0", registry=registry)
 
 # =========================
 # Aplikace + cache posledních výsledků
@@ -83,12 +90,10 @@ def ensure_csv_header() -> None:
             w = csv.writer(f)
             w.writerow(["ts", "download_mbps", "upload_mbps", "ping_ms", "jitter_ms", "packet_loss_pct"])
 
-
 def init_sqlite() -> None:
     if not USE_SQLITE:
         return
-    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True
-               )
+    os.makedirs(os.path.dirname(SQLITE_PATH), exist_ok=True)
     with sqlite3.connect(SQLITE_PATH) as conn:
         conn.execute(
             """
@@ -103,15 +108,44 @@ def init_sqlite() -> None:
             """
         )
 
+def prune_old_data() -> None:
+    """Smaže záznamy starší než RETENTION_DAYS (CSV i SQLite)."""
+    if RETENTION_DAYS <= 0:
+        return
+    cutoff = datetime.now(timezone.utc) - timedelta(days=RETENTION_DAYS)
+    # CSV
+    if os.path.exists(CSV_PATH):
+        tmp = CSV_PATH + ".tmp"
+        with open(CSV_PATH, "r", newline="") as src, open(tmp, "w", newline="") as dst:
+            r = csv.reader(src); w = csv.writer(dst)
+            header = next(r, None)
+            if header: w.writerow(header)
+            for row in r:
+                try:
+                    ts = datetime.fromisoformat(row[0])
+                    if ts >= cutoff:
+                        w.writerow(row)
+                except Exception:
+                    pass
+        os.replace(tmp, CSV_PATH)
+    # SQLite
+    if USE_SQLITE and os.path.exists(SQLITE_PATH):
+        with sqlite3.connect(SQLITE_PATH) as conn:
+            conn.execute("DELETE FROM results WHERE ts < ?", (cutoff.isoformat(),))
+            conn.commit()
+
 # =========================
 # Speedtest
 # =========================
-def run_speedtest() -> Dict[str, float]:
+def run_speedtest(aggregated_rtt_ms: Optional[float] = None) -> Dict[str, float]:
     """
     Vrátí dict s download/upload (Mb/s) a ping (ms).
-    1) Preferuje oficiální Ookla CLI (binárka `speedtest`) s tichým souhlasem.
-    2) Fallback: python speedtest-cli s secure=True (HTTPS) – řeší časté 403.
+    - Pokud ENABLE_SPEEDTEST = False → download/upload = 0 a ping = aggregated_rtt_ms (pokud je k dispozici).
+    - Jinak: preferuj oficiální Ookla CLI, fallback speedtest-cli (HTTPS).
     """
+    if not ENABLE_SPEEDTEST:
+        return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": float(aggregated_rtt_ms or 0.0)}
+
     try:
         cmd = [SPEEDTEST_BIN, "--format=json", "--progress=no", "--accept-license", "--accept-gdpr", *SPEEDTEST_EXTRA]
         out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=240)
@@ -143,14 +177,14 @@ def run_speedtest() -> Dict[str, float]:
 # =========================
 # Ping / jitter / loss
 # =========================
-def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
+def ping_stats(target: str, count: int, interval_s: float) -> Dict[str, float]:
     """
-    Vrátí loss (%) a jitter (ms) pro daný target pomocí systémového 'ping'.
+    Vrátí median RTT (ms), loss (%) a jitter (ms) pro daný target pomocí systémového 'ping'.
     """
     out = subprocess.check_output(
-        ["ping", "-n", "-c", str(count), "-i", "0.2", target],
+        ["ping", "-n", "-c", str(count), "-i", str(interval_s), target],
         stderr=subprocess.STDOUT,
-        timeout=20,
+        timeout=20 + int(count * interval_s * 2),
     ).decode(errors="ignore")
 
     times: List[float] = []
@@ -160,7 +194,6 @@ def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
 
     for line in out.splitlines():
         line = line.strip()
-
         if " time=" in line:
             try:
                 after = line.split(" time=")[1]
@@ -180,26 +213,31 @@ def ping_stats(target: str, count: int = 10) -> Dict[str, float]:
             except Exception:
                 pass
 
+    rtt_ms = statistics.median(times) if times else float("nan")
     jitter_ms = statistics.pstdev(times) if len(times) > 1 else 0.0
-    return {"loss_pct": float(loss_pct), "jitter_ms": float(jitter_ms)}
-
+    return {"rtt_ms": float(rtt_ms), "loss_pct": float(loss_pct), "jitter_ms": float(jitter_ms)}
 
 def aggregate_ping(targets: List[str]) -> Dict[str, float]:
     losses: List[float] = []
     jitters: List[float] = []
+    rtts: List[float] = []
     for t in targets:
         try:
-            s = ping_stats(t)
+            s = ping_stats(t, PING_COUNT, PING_INTERVAL_S)
             losses.append(s["loss_pct"])
             jitters.append(s["jitter_ms"])
+            rtts.append(s["rtt_ms"])
         except Exception:
             losses.append(100.0)
             jitters.append(float("nan"))
+            rtts.append(float("nan"))
 
     jitter_vals = [j for j in jitters if not math.isnan(j)]
+    rtt_vals = [r for r in rtts if not math.isnan(r)]
     jitter = statistics.median(jitter_vals) if jitter_vals else 0.0
     loss = statistics.median(losses) if losses else 100.0
-    return {"jitter_ms": float(jitter), "loss_pct": float(loss)}
+    rtt = statistics.median(rtt_vals) if rtt_vals else 0.0
+    return {"jitter_ms": float(jitter), "loss_pct": float(loss), "rtt_ms": float(rtt)}
 
 # =========================
 # Jedno měření (s retries)
@@ -211,15 +249,17 @@ def measure_once() -> Dict[str, Any]:
     while attempt <= RETRY_MAX:
         try:
             t0 = time.perf_counter()
-            st = run_speedtest()
+            # ping/jitter/loss + rtt
             pp = aggregate_ping(TARGETS)
+            # speedtest (download/upload/ping) — může být vypnutý
+            st = run_speedtest(aggregated_rtt_ms=pp["rtt_ms"])
 
             now = datetime.now(timezone.utc).isoformat()
             res = {
                 "ts": now,
                 "download_mbps": float(st["download_mbps"]),
                 "upload_mbps": float(st["upload_mbps"]),
-                "ping_ms": float(st["ping_ms"]),
+                "ping_ms": float(st["ping_ms"] if ENABLE_SPEEDTEST else pp["rtt_ms"]),
                 "jitter_ms": float(pp["jitter_ms"]),
                 "packet_loss_pct": float(pp["loss_pct"]),
             }
@@ -270,6 +310,7 @@ def persist(res: Dict[str, Any]) -> None:
             )
 
 def update_metrics(res: Dict[str, Any], duration_s: float) -> None:
+    speedtest_enabled_g.set(1.0 if ENABLE_SPEEDTEST else 0.0)
     download_g.set(res["download_mbps"])
     upload_g.set(res["upload_mbps"])
     ping_g.set(res["ping_ms"])
@@ -287,14 +328,16 @@ def loop() -> None:
             pass
         time.sleep(2)
 
+    # Hlavní smyčka s živým INTERVAL_SEC
     while True:
         try:
             res = measure_once()
             persist(res)
+            prune_old_data()
             _recent.append(res)
         except Exception:
             errors_total.inc()
-        time.sleep(INTERVAL_SEC)
+        time.sleep(max(5, INTERVAL_SEC))
 
 # =========================
 # UI + API
@@ -340,12 +383,18 @@ h1{margin:0 0 8px;font-size:32px}
   display:block;
 }
 footer{color:var(--muted);font-size:12px;margin-top:10px}
+fieldset{border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); border-radius:12px; padding:12px 14px; margin:16px 0;}
+legend{color:var(--muted); padding:0 6px; font-size:12px;}
+.form-row{display:grid; gap:12px; grid-template-columns:repeat(3,minmax(0,1fr));}
+.form-row label{display:flex; flex-direction:column; gap:6px; font-size:13px;}
+input[type="text"],input[type="number"]{padding:8px 10px; border-radius:8px; border:1px solid color-mix(in oklab,var(--muted) 40%,transparent); background:transparent; color:var(--fg)}
+.switch{display:flex; align-items:center; gap:8px;}
 </style>
 </head>
 <body>
 <div class="container">
   <h1>Internet Quality Monitor</h1>
-  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem.</p>
+  <p class="sub">Rychlý přehled kvality připojení s živým grafem a exportem. Níže lze měnění chování testů za běhu.</p>
 
   <div class="row">
     <div id="statusPill" class="pill">Načítám…</div>
@@ -355,6 +404,37 @@ footer{color:var(--muted);font-size:12px;margin-top:10px}
       <a class="button secondary" href="/api/export.csv">Stáhnout CSV</a>
     </div>
   </div>
+
+  <fieldset>
+    <legend>Nastavení testování</legend>
+    <div class="form-row">
+      <label>Interval měření (s)
+        <input id="interval" type="number" min="5" step="5" value="300">
+      </label>
+      <label>Počet pingů (na target)
+        <input id="pingCount" type="number" min="1" max="50" step="1" value="10">
+      </label>
+      <label>Interval pingů (s)
+        <input id="pingInterval" type="number" min="0.05" step="0.05" value="0.2">
+      </label>
+    </div>
+    <div class="form-row" style="margin-top:8px">
+      <label>Cílové adresy (comma)
+        <input id="targets" type="text" placeholder="8.8.8.8,1.1.1.1">
+      </label>
+      <label>Speedtest server ID
+        <input id="serverId" type="number" min="0" step="1" placeholder="(volitelné)">
+      </label>
+      <label class="switch">
+        <input id="enableSt" type="checkbox" checked>
+        <span>Použít speedtest (download/upload)</span>
+      </label>
+    </div>
+    <div class="actions" style="margin-top:10px">
+      <button id="saveCfg" class="button secondary">Uložit nastavení</button>
+      <span id="saveInfo" class="label"></span>
+    </div>
+  </fieldset>
 
   <div class="grid">
     <div class="card">
@@ -376,7 +456,12 @@ footer{color:var(--muted);font-size:12px;margin-top:10px}
     <div class="chart-box"><canvas id="chart"></canvas></div>
   </div>
 
-  <footer>Auto-refresh každých 30 s • Prahy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
+  <div class="card" style="margin-top:16px; overflow:hidden">
+    <div class="label">Latence / Jitter / Packet loss</div>
+    <div class="chart-box"><canvas id="chart2"></canvas></div>
+  </div>
+
+  <footer>Auto-refresh každých 30 s • Prahy pro barvy lze změnit přes parametry URL: <code>?dlow=200&uplow=200</code></footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -384,7 +469,7 @@ footer{color:var(--muted);font-size:12px;margin-top:10px}
 const qs = new URLSearchParams(location.search);
 const DLOW = Number(qs.get('dlow')||200);
 const ULOW = Number(qs.get('uplow')||200);
-let chart;
+let chart, chart2;
 
 function cls(r){
   if ((r.packet_loss_pct||0) > 5 || (r.download_mbps||0) < 5) return 'bad';
@@ -394,8 +479,33 @@ function cls(r){
 }
 function fmt(n,u){return (n==null || Number.isNaN(n)) ? '—' : (Number(n).toFixed(1)+' '+u)}
 
+async function loadCfg(){
+  const r = await fetch('/api/config'); const c = await r.json();
+  document.getElementById('interval').value = c.interval_sec;
+  document.getElementById('pingCount').value = c.ping_count;
+  document.getElementById('pingInterval').value = c.ping_interval_s;
+  document.getElementById('targets').value = c.targets.join(', ');
+  document.getElementById('serverId').value = c.server_id || '';
+  document.getElementById('enableSt').checked = c.enable_speedtest;
+}
+
+async function saveCfg(){
+  const body = {
+    interval_sec: Number(document.getElementById('interval').value),
+    ping_count: Number(document.getElementById('pingCount').value),
+    ping_interval_s: Number(document.getElementById('pingInterval').value),
+    targets: document.getElementById('targets').value.split(',').map(s=>s.trim()).filter(Boolean),
+    server_id: Number(document.getElementById('serverId').value) || null,
+    enable_speedtest: document.getElementById('enableSt').checked
+  };
+  const r = await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  const c = await r.json();
+  document.getElementById('saveInfo').textContent = 'Uloženo ✔';
+  setTimeout(()=>document.getElementById('saveInfo').textContent='', 2000);
+}
+
 async function load(){
-  const r = await fetch('/api/results?limit=120');
+  const r = await fetch('/api/results?limit=240');
   const data = await r.json();
   const arr = data.results || [];
   if (!arr.length) return;
@@ -414,6 +524,9 @@ async function load(){
   const labels = arr.map(x => new Date(x.ts).toLocaleTimeString());
   const dl = arr.map(x => x.download_mbps);
   const ul = arr.map(x => x.upload_mbps);
+  const ping = arr.map(x => x.ping_ms);
+  const jitter = arr.map(x => x.jitter_ms);
+  const loss = arr.map(x => x.packet_loss_pct);
 
   const el = document.getElementById('chart');
   if (!chart){
@@ -434,6 +547,28 @@ async function load(){
     chart.data.datasets[1].data = ul;
     chart.update('none');
   }
+
+  const el2 = document.getElementById('chart2');
+  if (!chart2){
+    chart2 = new Chart(el2, {
+      type: 'line',
+      data: { labels, datasets: [
+        { label: 'Ping (ms)', data: ping },
+        { label: 'Jitter (ms)', data: jitter, borderDash: [6,4] },
+        { label: 'Loss (%)', data: loss, yAxisID: 'y1' }
+      ]},
+      options: { animation:false, responsive:true, maintainAspectRatio:false, resizeDelay:150,
+        interaction:{mode:'index',intersect:false},
+        scales:{ y:{ beginAtZero:true }, y1:{ beginAtZero:true, position:'right' } }
+      }
+    });
+  } else {
+    chart2.data.labels = labels;
+    chart2.data.datasets[0].data = ping;
+    chart2.data.datasets[1].data = jitter;
+    chart2.data.datasets[2].data = loss;
+    chart2.update('none');
+  }
 }
 
 document.getElementById('runBtn').onclick = async () => {
@@ -443,7 +578,9 @@ document.getElementById('runBtn').onclick = async () => {
   catch(e){ alert('Měření se nepovedlo: '+e); }
   finally { b.disabled=false; b.textContent='Spustit měření';}
 };
+document.getElementById('saveCfg').onclick = saveCfg;
 
+loadCfg();
 load(); setInterval(load, 30000);
 </script>
 </body>
@@ -475,6 +612,66 @@ def export_csv():
             media_type="text/csv",
         )
 
+@app.get("/api/config")
+def get_config():
+    return {
+        "interval_sec": INTERVAL_SEC,
+        "ping_count": PING_COUNT,
+        "ping_interval_s": PING_INTERVAL_S,
+        "targets": TARGETS,
+        "server_id": _extract_server_id(SPEEDTEST_EXTRA),
+        "enable_speedtest": ENABLE_SPEEDTEST,
+        "retention_days": RETENTION_DAYS,
+    }
+
+def _extract_server_id(extra: List[str]) -> Optional[int]:
+    if "--server-id" in extra:
+        try:
+            idx = extra.index("--server-id")
+            return int(extra[idx+1])
+        except Exception:
+            return None
+    return None
+
+@app.post("/api/config")
+def set_config(payload: Dict[str, Any] = Body(...)):
+    global INTERVAL_SEC, PING_COUNT, PING_INTERVAL_S, TARGETS, SPEEDTEST_EXTRA, ENABLE_SPEEDTEST
+    # interval
+    if "interval_sec" in payload:
+        INTERVAL_SEC = max(5, int(payload["interval_sec"]))
+    # ping count/interval
+    if "ping_count" in payload:
+        PING_COUNT = max(1, min(50, int(payload["ping_count"])))
+    if "ping_interval_s" in payload:
+        PING_INTERVAL_S = max(0.01, float(payload["ping_interval_s"]))
+    # targets
+    if "targets" in payload and isinstance(payload["targets"], list):
+        TARGETS = [str(t).strip() for t in payload["targets"] if str(t).strip()]
+    # speedtest enable
+    if "enable_speedtest" in payload:
+        ENABLE_SPEEDTEST = bool(payload["enable_speedtest"])
+    # server-id (reset nebo nastavení)
+    if "server_id" in payload:
+        sid = payload["server_id"]
+        if sid is None or int(sid) <= 0:
+            # odstraníme server-id
+            SPEEDTEST_EXTRA = [x for x in SPEEDTEST_EXTRA if x != "--server-id" and not x.isdigit()]
+        else:
+            # nastavíme / nahradíme
+            # vyhoď existující --server-id
+            cleaned = []
+            skip_next = False
+            for i, x in enumerate(SPEEDTEST_EXTRA):
+                if skip_next:
+                    skip_next = False
+                    continue
+                if x == "--server-id":
+                    skip_next = True
+                    continue
+                cleaned.append(x)
+            SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
+    return get_config()
+
 @app.get("/health")
 def health():
     try:
@@ -488,6 +685,7 @@ def run_now():
     """Spuštění měření okamžitě."""
     res = measure_once()
     persist(res)
+    prune_old_data()
     _recent.append(res)
     return JSONResponse({"status": "ok", "result": res})
 
