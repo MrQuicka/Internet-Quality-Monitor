@@ -220,6 +220,11 @@ if __name__ == "__main__":
     # Init DB a CSV
     ensure_csv_header()
     init_sqlite()
+
     # Spuštění měřící smyčky v separátním vlákně
     import threading
-    th = threading.Thread(tar
+    th = threading.Thread(target=loop, daemon=True)
+    th.start()
+
+    # HTTP server
+    uvicorn.run(app, host=BIND, port=PORT)
