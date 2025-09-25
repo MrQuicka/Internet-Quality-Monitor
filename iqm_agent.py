@@ -789,51 +789,88 @@ def export_csv(
 
 @app.get("/api/config")
 def get_config():
+    # map interních hodnot na strukturu pro dashboard
     return {
-        "interval_sec": INTERVAL_SEC,
-        "ping_count": PING_COUNT,
-        "ping_interval_s": PING_INTERVAL_S,
-        "targets": TARGETS,
-        "server_id": _extract_server_id(SPEEDTEST_EXTRA),
-        "enable_speedtest": ENABLE_SPEEDTEST,
-        "retention_days": RETENTION_DAYS,
+        "general": {
+            "test_interval": max(1, int(INTERVAL_SEC // 60)) if isinstance(INTERVAL_SEC, (int, float)) else 5,
+            "auto_test_enabled": True,  # interně se nepoužívá, necháme zapnuté
+        },
+        "tests": {
+            "speed_test_enabled": bool(ENABLE_SPEEDTEST),
+            "speed_test_interval": 6,  # interně nemáme N-tý test, necháme pro UI default
+            "ping": {
+                "enabled": True,  # ping je vždy aktivní v aktuální implementaci
+                "count": int(PING_COUNT),
+            },
+        },
+        # TARGETS interně držíme jako list stringů; UI chce objekty
+        "ping_targets": [
+            {"name": h, "host": h, "enabled": True} for h in (TARGETS or [])
+        ],
     }
 
-def _extract_server_id(extra: List[str]) -> Optional[int]:
-    if "--server-id" in extra:
-        try:
-            idx = extra.index("--server-id")
-            return int(extra[idx+1])
-        except Exception:
-            return None
-    return None
+
+from fastapi import Body
 
 @app.post("/api/config")
 def set_config(payload: Dict[str, Any] = Body(...)):
-    global INTERVAL_SEC, PING_COUNT, PING_INTERVAL_S, TARGETS, SPEEDTEST_EXTRA, ENABLE_SPEEDTEST
-    if "interval_sec" in payload:
-        INTERVAL_SEC = max(5, int(payload["interval_sec"]))
-    if "ping_count" in payload:
-        PING_COUNT = max(1, min(50, int(payload["ping_count"])))
-    if "ping_interval_s" in payload:
-        PING_INTERVAL_S = max(0.01, float(payload["ping_interval_s"]))
-    if "targets" in payload and isinstance(payload["targets"], list):
-        TARGETS = [str(t).strip() for t in payload["targets"] if str(t).strip()]
-    if "enable_speedtest" in payload:
-        ENABLE_SPEEDTEST = bool(payload["enable_speedtest"])
+    global INTERVAL_SEC, PING_COUNT, TARGETS, ENABLE_SPEEDTEST, SPEEDTEST_EXTRA
+
+    # ----- general -----
+    general = payload.get("general", {})
+    if "test_interval" in general:
+        # UI posílá minuty -> interně máme sekundy
+        try:
+            minutes = int(general["test_interval"])
+            INTERVAL_SEC = max(5, minutes * 60)
+        except Exception:
+            pass
+
+    # ----- tests -----
+    tests = payload.get("tests", {})
+    # speedtest zap/vyp
+    if "speed_test_enabled" in tests:
+        ENABLE_SPEEDTEST = bool(tests["speed_test_enabled"])
+    # ping count
+    ping_cfg = tests.get("ping", {})
+    if "count" in ping_cfg:
+        try:
+            PING_COUNT = max(1, min(50, int(ping_cfg["count"])))
+        except Exception:
+            pass
+
+    # ----- ping targets -----
+    # UI posílá list objektů {name, host, enabled}; interně držíme list hostů (stringy) a ignorujeme disabled
+    if "ping_targets" in payload and isinstance(payload["ping_targets"], list):
+        new_targets = []
+        for t in payload["ping_targets"]:
+            host = str(t.get("host") or "").strip()
+            enabled = bool(t.get("enabled", True))
+            if host and enabled:
+                new_targets.append(host)
+        # Pokud nic nezůstalo, necháme aspoň default 8.8.8.8, ať měření neodumře
+        TARGETS = new_targets or ["8.8.8.8"]
+
+    # server_id (pokud by přišel v novém payloadu – zatím UI neposílá)
     if "server_id" in payload:
         sid = payload["server_id"]
-        if sid is None or int(sid) <= 0:
+        if sid is None or (isinstance(sid, int) and sid <= 0):
             SPEEDTEST_EXTRA = [x for x in SPEEDTEST_EXTRA if x != "--server-id" and not x.isdigit()]
         else:
-            cleaned = []
-            skip_next = False
+            cleaned, skip_next = [], False
             for x in SPEEDTEST_EXTRA:
-                if skip_next: skip_next = False; continue
-                if x == "--server-id": skip_next = True; continue
+                if skip_next: 
+                    skip_next = False
+                    continue
+                if x == "--server-id":
+                    skip_next = True
+                    continue
                 cleaned.append(x)
             SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
-    return get_config()
+
+    # Vrátíme status a aktuální config pro UI
+    return {"status": "success", "config": get_config()}
+
 
 @app.get("/health")
 def health():
