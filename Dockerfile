@@ -2,22 +2,33 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# systémové nástroje: ping + curl + certifikáty + gnupg (repo pro Ookla)
+# Systémové závislosti včetně Ookla speedtest
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    iputils-ping curl ca-certificates gnupg \
- && rm -rf /var/lib/apt/lists/*
+    iputils-ping \
+    curl \
+    ca-certificates \
+    gnupg \
+    lsb-release \
+    && rm -rf /var/lib/apt/lists/*
 
-# instalace Ookla speedtest CLI
-RUN set -eux; \
-    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends speedtest; \
-    rm -rf /var/lib/apt/lists/*
+# Instalace oficiálního Ookla Speedtest CLI
+RUN curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash \
+    && apt-get update \
+    && apt-get install -y speedtest \
+    && rm -rf /var/lib/apt/lists/*
 
+# Předběžné přijetí licence Ookla speedtest
+RUN speedtest --accept-license --accept-gdpr || true
+
+# Python závislosti
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
+# Aplikační soubory
 COPY . ./
 
+# Vytvoření data složky
+RUN mkdir -p /app/data
+
 EXPOSE 5001
-CMD ["python", "iqm_agent.py"]
+CMD ["python", "-u", "iqm_agent.py"]
