@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import os
 import csv
 import time
@@ -45,7 +46,7 @@ PING_INTERVAL_S = float(os.getenv("IQM_PING_INTERVAL_S", "0.2"))
 BIND = os.getenv("IQM_BIND", "0.0.0.0")
 PORT = int(os.getenv("IQM_PORT", "5001"))
 
-# Preferujeme Ookla CLI; fallback je python speedtest-cli (HTTPS)
+# Speedtest settings
 SPEEDTEST_BIN = os.getenv("IQM_SPEEDTEST_BIN", "speedtest")
 SPEEDTEST_EXTRA = shlex.split(os.getenv("IQM_SPEEDTEST_ARGS", ""))
 ENABLE_SPEEDTEST = os.getenv("IQM_ENABLE_SPEEDTEST", "1") == "1"
@@ -80,6 +81,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 _recent: deque[Dict[str, Any]] = deque(maxlen=500)
+
 # =========================
 # Helpers — čas a CSV
 # =========================
@@ -165,55 +167,96 @@ def _row_to_obj(row: List[str]) -> Dict[str, Any]:
     }
 
 # =========================
-# Speedtest
+# Speedtest - OPRAVENÁ VERZE
 # =========================
 def run_speedtest(aggregated_rtt_ms: Optional[float] = None) -> Dict[str, float]:
     """
     Vrátí dict s download/upload (Mb/s) a ping (ms).
-    - Pokud ENABLE_SPEEDTEST = False → download/upload = 0 a ping = aggregated_rtt_ms (pokud je k dispozici).
-    - Jinak: preferuj oficiální Ookla CLI, fallback speedtest-cli (HTTPS).
+    - Pokud ENABLE_SPEEDTEST = False → download/upload = 0 a ping = aggregated_rtt_ms
+    - Jinak: použij oficiální Ookla CLI s správným parsováním
     """
     if not ENABLE_SPEEDTEST:
         return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": float(aggregated_rtt_ms or 0.0)}
 
     try:
+        # Kontrola existence speedtest binary
+        which_cmd = subprocess.run(["which", SPEEDTEST_BIN], capture_output=True, text=True)
+        if which_cmd.returncode != 0:
+            raise RuntimeError(f"Speedtest binary '{SPEEDTEST_BIN}' not found in PATH")
+
+        # Spuštění Ookla speedtest
         cmd = [SPEEDTEST_BIN, "--format=json", "--progress=no", "--accept-license", "--accept-gdpr", *SPEEDTEST_EXTRA]
-        out = subprocess.check_output(cmd, stderr=subprocess.STDOUT, timeout=240)
-        data = json.loads(out.decode("utf-8", errors="ignore"))
-        down = data.get("download", {}).get("bandwidth")
-        up = data.get("upload", {}).get("bandwidth")
-        ping = data.get("ping", {}).get("latency")
-
-        down_mbps = (down * 8 / 1e6) if isinstance(down, (int, float)) else None
-        up_mbps = (up * 8 / 1e6) if isinstance(up, (int, float)) else None
-        ping_ms = float(ping) if isinstance(ping, (int, float)) else None
+        
+        print(f"Running speedtest command: {' '.join(cmd)}")
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        
+        if result.returncode != 0:
+            print(f"Speedtest error (code {result.returncode}): {result.stderr}")
+            raise RuntimeError(f"Speedtest failed with code {result.returncode}: {result.stderr}")
+        
+        # Parse JSON výstupu
+        try:
+            data = json.loads(result.stdout)
+        except json.JSONDecodeError as e:
+            print(f"Failed to parse speedtest JSON: {e}")
+            print(f"Raw output: {result.stdout}")
+            raise RuntimeError(f"Invalid JSON from speedtest: {e}")
+        
+        # Ookla speedtest vrací rychlosti v BYTES per second
+        # Musíme převést na Mbps (megabits per second)
+        down_bytes = data.get("download", {}).get("bandwidth")
+        up_bytes = data.get("upload", {}).get("bandwidth")
+        ping_val = data.get("ping", {}).get("latency")
+        
+        # Převod bytes/s na Mbps: (bytes * 8) / 1_000_000
+        down_mbps = (down_bytes * 8 / 1_000_000) if isinstance(down_bytes, (int, float)) else None
+        up_mbps = (up_bytes * 8 / 1_000_000) if isinstance(up_bytes, (int, float)) else None
+        ping_ms = float(ping_val) if isinstance(ping_val, (int, float)) else None
+        
+        # Debug log
+        print(f"Speedtest results: Download={down_mbps:.2f} Mbps, Upload={up_mbps:.2f} Mbps, Ping={ping_ms:.2f} ms")
+        
         if down_mbps is None or up_mbps is None or ping_ms is None:
-            raise RuntimeError("Ookla CLI: nekompletní výstup")
-
+            raise RuntimeError(f"Incomplete speedtest data: down={down_mbps}, up={up_mbps}, ping={ping_ms}")
+        
+        # Sanity check - pokud je ping přes 1000ms, použij agregovaný ping
+        if ping_ms > 1000 and aggregated_rtt_ms is not None:
+            print(f"Warning: Speedtest ping too high ({ping_ms}ms), using aggregated ping ({aggregated_rtt_ms}ms)")
+            ping_ms = aggregated_rtt_ms
+        
         return {"download_mbps": down_mbps, "upload_mbps": up_mbps, "ping_ms": ping_ms}
 
-    except Exception as cli_err:
-        try:
-            import speedtest  # type: ignore
-            s = speedtest.Speedtest(secure=True)
-            s.get_best_server()
-            down = s.download() / 1e6
-            up = s.upload() / 1e6
-            ping = float(s.results.ping)
-            return {"download_mbps": down, "upload_mbps": up, "ping_ms": ping}
-        except Exception as e:
-            raise RuntimeError(f"Speedtest failed: {e}") from cli_err# =========================
-# Ping / jitter / loss
+    except subprocess.TimeoutExpired:
+        print("Speedtest timeout after 120 seconds")
+        raise RuntimeError("Speedtest timeout")
+    except Exception as e:
+        print(f"Speedtest error: {e}")
+        # Fallback na aggregated ping pokud speedtest selže
+        if aggregated_rtt_ms is not None:
+            return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": aggregated_rtt_ms}
+        raise RuntimeError(f"Speedtest failed: {e}")
+
+# =========================
+# Ping / jitter / loss - VYLEPŠENÁ VERZE
 # =========================
 def ping_stats(target: str, count: int, interval_s: float) -> Dict[str, float]:
     """
     Vrátí median RTT (ms), loss (%) a jitter (ms) pro daný target pomocí systémového 'ping'.
     """
-    out = subprocess.check_output(
-        ["ping", "-n", "-c", str(count), "-i", str(interval_s), target],
-        stderr=subprocess.STDOUT,
-        timeout=20 + int(count * interval_s * 2),
-    ).decode(errors="ignore")
+    try:
+        # Použij -W pro timeout na RPi (kompatibilní s Linux ping)
+        cmd = ["ping", "-n", "-c", str(count), "-i", str(interval_s), "-W", "2", target]
+        out = subprocess.check_output(
+            cmd,
+            stderr=subprocess.STDOUT,
+            timeout=20 + int(count * interval_s * 2),
+        ).decode(errors="ignore")
+    except subprocess.CalledProcessError as e:
+        print(f"Ping failed for {target}: {e.output.decode(errors='ignore')}")
+        return {"rtt_ms": float("nan"), "loss_pct": 100.0, "jitter_ms": float("nan")}
+    except subprocess.TimeoutExpired:
+        print(f"Ping timeout for {target}")
+        return {"rtt_ms": float("nan"), "loss_pct": 100.0, "jitter_ms": float("nan")}
 
     times: List[float] = []
     tx = count
@@ -222,6 +265,7 @@ def ping_stats(target: str, count: int, interval_s: float) -> Dict[str, float]:
 
     for line in out.splitlines():
         line = line.strip()
+        # Parse ping times
         if " time=" in line:
             try:
                 after = line.split(" time=")[1]
@@ -232,39 +276,51 @@ def ping_stats(target: str, count: int, interval_s: float) -> Dict[str, float]:
             except Exception:
                 pass
 
+        # Parse statistics
         if "packets transmitted" in line and "received" in line:
             try:
                 parts = line.replace("%", "").split(",")
-                tx = int(parts[0].split()[0])
-                rx = int(parts[1].split()[0])
+                tx_str = parts[0].split()[0]
+                rx_str = parts[1].split()[0]
+                tx = int(tx_str)
+                rx = int(rx_str)
                 loss_pct = (100.0 * (tx - rx) / tx) if tx > 0 else 100.0
             except Exception:
                 pass
 
     rtt_ms = statistics.median(times) if times else float("nan")
     jitter_ms = statistics.pstdev(times) if len(times) > 1 else 0.0
+    
+    print(f"Ping to {target}: RTT={rtt_ms:.2f}ms, Loss={loss_pct:.1f}%, Jitter={jitter_ms:.2f}ms")
+    
     return {"rtt_ms": float(rtt_ms), "loss_pct": float(loss_pct), "jitter_ms": float(jitter_ms)}
 
 def aggregate_ping(targets: List[str]) -> Dict[str, float]:
     losses: List[float] = []
     jitters: List[float] = []
     rtts: List[float] = []
+    
     for t in targets:
         try:
             s = ping_stats(t, PING_COUNT, PING_INTERVAL_S)
             losses.append(s["loss_pct"])
             jitters.append(s["jitter_ms"])
             rtts.append(s["rtt_ms"])
-        except Exception:
+        except Exception as e:
+            print(f"Exception during ping to {t}: {e}")
             losses.append(100.0)
             jitters.append(float("nan"))
             rtts.append(float("nan"))
 
     jitter_vals = [j for j in jitters if not math.isnan(j)]
     rtt_vals = [r for r in rtts if not math.isnan(r)]
+    
     jitter = statistics.median(jitter_vals) if jitter_vals else 0.0
     loss = statistics.median(losses) if losses else 100.0
     rtt = statistics.median(rtt_vals) if rtt_vals else 0.0
+    
+    print(f"Aggregated ping: RTT={rtt:.2f}ms, Loss={loss:.1f}%, Jitter={jitter:.2f}ms")
+    
     return {"jitter_ms": float(jitter), "loss_pct": float(loss), "rtt_ms": float(rtt)}
 
 # =========================
@@ -277,8 +333,15 @@ def measure_once() -> Dict[str, Any]:
     while attempt <= RETRY_MAX:
         try:
             t0 = time.perf_counter()
+            
+            # Nejdřív ping testy
             pp = aggregate_ping(TARGETS)
-            st = run_speedtest(aggregated_rtt_ms=pp["rtt_ms"])
+            
+            # Pak speedtest (pokud je povolen)
+            if ENABLE_SPEEDTEST:
+                st = run_speedtest(aggregated_rtt_ms=pp["rtt_ms"])
+            else:
+                st = {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": pp["rtt_ms"]}
 
             now = datetime.now(timezone.utc).isoformat()
             res = {
@@ -288,22 +351,28 @@ def measure_once() -> Dict[str, Any]:
                 "ping_ms": float(st["ping_ms"] if ENABLE_SPEEDTEST else pp["rtt_ms"]),
                 "jitter_ms": float(pp["jitter_ms"]),
                 "packet_loss_pct": float(pp["loss_pct"]),
-                "online": True  # Pokud jsme se dostali sem, jsme online
+                "online": True
             }
 
             dt = time.perf_counter() - t0
             update_metrics(res, dt)
+            
+            print(f"Measurement complete in {dt:.1f}s: Download={res['download_mbps']:.2f} Mbps, "
+                  f"Upload={res['upload_mbps']:.2f} Mbps, Ping={res['ping_ms']:.2f} ms")
+            
             return res
 
         except Exception as e:
             last_err = e
             attempt += 1
+            print(f"Measurement attempt {attempt} failed: {e}")
             if attempt > RETRY_MAX:
                 break
             time.sleep(backoff + (0.2 * attempt))
             backoff *= 2
 
     # Pokud všechny pokusy selhaly, vrátíme offline stav
+    print(f"All measurement attempts failed. Last error: {last_err}")
     now = datetime.now(timezone.utc).isoformat()
     offline_res = {
         "ts": now,
@@ -360,30 +429,34 @@ def update_metrics(res: Dict[str, Any], duration_s: float) -> None:
 
 def loop() -> None:
     # Warm-up
-    for _ in range(WARMUP_RUNS):
+    print(f"Starting monitoring loop with {WARMUP_RUNS} warmup runs...")
+    for i in range(WARMUP_RUNS):
         try:
+            print(f"Warmup run {i+1}/{WARMUP_RUNS}")
             _ = measure_once()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Warmup run {i+1} failed: {e}")
         time.sleep(2)
 
+    print(f"Starting main monitoring loop with {INTERVAL_SEC}s interval...")
     while True:
         try:
             res = measure_once()
             persist(res)
             prune_old_data()
             _recent.append(res)
-        except Exception:
+        except Exception as e:
+            print(f"Error in main loop: {e}")
             errors_total.inc()
         time.sleep(max(5, INTERVAL_SEC))
-        # =========================
+
+# =========================
 # Homer API endpointy
 # =========================
 @app.get("/api/homer-status")
 def homer_status():
     """Endpoint pro Homer message widget s aktuálním stavem připojení"""
     try:
-        # Získej nejnovější data
         latest = list(_recent)[-1] if _recent else None
         
         if not latest:
@@ -393,7 +466,6 @@ def homer_status():
                 "style": "is-light"
             }
         
-        # Vyhodnocení stavu
         ping = latest.get('ping_ms', 0)
         download = latest.get('download_mbps', 0) 
         upload = latest.get('upload_mbps', 0)
@@ -401,14 +473,12 @@ def homer_status():
         online = latest.get('online', True)
         jitter = latest.get('jitter_ms', 0)
         
-        # Formatování hodnot
         ping_str = f"{ping:.1f}" if ping and ping > 0 else "--"
         download_str = f"{download:.1f}" if download and download > 0 else "--"
         upload_str = f"{upload:.1f}" if upload and upload > 0 else "--"
         loss_str = f"{loss:.1f}" if loss and loss > 0 else "0.0"
         jitter_str = f"{jitter:.1f}" if jitter and jitter > 0 else "--"
         
-        # Určení stylu a zprávy
         if not online:
             return {
                 "title": "❌ Internet je offline",
@@ -416,19 +486,18 @@ def homer_status():
                 "style": "is-danger"
             }
         
-        # Kontrola kritických problémů
-        if (loss and loss > 5) or (download and download < 50) or (ping and ping > 100):
+        # Upravené limity pro 300/300 připojení
+        if (loss and loss > 5) or (download and download < 100) or (ping and ping > 100):
             return {
                 "title": "🚨 Kritické problémy s připojením",
                 "content": f"📥 {download_str} Mbps • 📤 {upload_str} Mbps • 📡 {ping_str} ms • 📦 {loss_str}% ztráta • ⚡ {jitter_str} ms jitter",
                 "style": "is-danger"
             }
         
-        # Kontrola degradace
-        elif (loss and loss > 1) or (download and download < 200) or (ping and ping > 50) or (jitter and jitter > 20):
+        elif (loss and loss > 1) or (download and download < 250) or (ping and ping > 50) or (jitter and jitter > 20):
             quality_issues = []
             if loss and loss > 1: quality_issues.append(f"ztráty {loss_str}%")
-            if download and download < 200: quality_issues.append(f"pomalý DL")
+            if download and download < 250: quality_issues.append(f"pomalý DL")
             if ping and ping > 50: quality_issues.append(f"vysoký ping")
             if jitter and jitter > 20: quality_issues.append(f"vysoký jitter")
             
@@ -439,13 +508,11 @@ def homer_status():
                 "style": "is-warning"
             }
         
-        # Vše v pořádku
         else:
-            # Určení kvality podle rychlosti
-            if download and download >= 500:
+            if download and download >= 290:
                 quality = "Vynikající"
                 emoji = "🚀"
-            elif download and download >= 300:
+            elif download and download >= 250:
                 quality = "Výborná"
                 emoji = "✨"
             else:
@@ -484,7 +551,6 @@ def homer_service_status():
         loss = latest.get('packet_loss_pct', 0)
         online = latest.get('online', True)
         
-        # Formatování hodnot pro kompaktní zobrazení
         dl = f"{download:.0f}" if download and download > 0 else "--"
         ul = f"{upload:.0f}" if upload and upload > 0 else "--"
         ping_val = f"{ping:.0f}ms" if ping and ping > 0 else "--"
@@ -495,13 +561,13 @@ def homer_service_status():
                 "subtitle": "🔴 Offline",
                 "emoji": "🔴"
             }
-        elif (loss and loss > 5) or (download and download < 50) or (ping and ping > 100):
+        elif (loss and loss > 5) or (download and download < 100) or (ping and ping > 100):
             return {
                 "status": "critical",
                 "subtitle": f"🔴 Problémy • ↓{dl} ↑{ul} Mbps • {ping_val}",
                 "emoji": "🔴"
             }
-        elif (loss and loss > 1) or (download and download < 200) or (ping and ping > 50):
+        elif (loss and loss > 1) or (download and download < 250) or (ping and ping > 50):
             return {
                 "status": "warning", 
                 "subtitle": f"🟡 Degradace • ↓{dl} ↑{ul} Mbps • {ping_val}",
@@ -525,7 +591,7 @@ def homer_service_status():
 def api_latest():
     """Get latest measurement result"""
     if not _recent:
-        return Response(status_code=204)  # No content
+        return Response(status_code=204)
     
     latest = list(_recent)[-1]
     return {
@@ -538,18 +604,12 @@ def api_latest():
         "online": latest.get("online", True)
     }
 
-from fastapi import Query  # už importuješ výše
-
 @app.get("/api/history")
 def api_history(
     period: str = Query("day", description="hour|day|week|month"),
     limit: int = Query(288, ge=1, le=1000),
 ):
-    """
-    Get measurement history – kompatibilní s dashboardem.
-    period se používá pouze k odhadu rozumného limitu, pokud ho klient neposlal.
-    """
-    # pokud klient neposlal limit, dopočítej rozumný podle INTERVAL_SEC
+    """Get measurement history"""
     if "limit" not in {p.split("=")[0] for p in str(period).split("&")}:
         seconds = {
             "hour": 60*60,
@@ -566,14 +626,14 @@ def api_history(
     for item in arr:
         data.append({
             "ts": item["ts"],
-            "timestamp": item["ts"],                 # kompatibilita s dashboardem
+            "timestamp": item["ts"],
             "ping_ms": item.get("ping_ms"),
-            "ping": item.get("ping_ms"),             # kompatibilita s dashboardem
+            "ping": item.get("ping_ms"),
             "jitter_ms": item.get("jitter_ms"),
             "download_mbps": item.get("download_mbps"),
-            "download": item.get("download_mbps"),   # kompatibilita s dashboardem
+            "download": item.get("download_mbps"),
             "upload_mbps": item.get("upload_mbps"),
-            "upload": item.get("upload_mbps"),       # kompatibilita s dashboardem
+            "upload": item.get("upload_mbps"),
             "packet_loss": item.get("packet_loss_pct"),
             "online": item.get("online", True),
         })
@@ -581,16 +641,12 @@ def api_history(
 
 @app.post("/api/run")
 def api_run():
+    """Run manual test"""
     return run_now()
 
-
-# =========================
-# Zbývající API endpointy
-# =========================
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def root() -> str:
     try:
-        # Zkus načíst dashboard.html soubor
         dashboard_path = "/app/dashboard.html"
         if os.path.exists(dashboard_path):
             with open(dashboard_path, "r", encoding="utf-8") as f:
@@ -598,7 +654,6 @@ def root() -> str:
     except Exception:
         pass
     
-    # Fallback - jednoduchá stránka s odkazy
     return """
 <!DOCTYPE html>
 <html lang="cs">
@@ -623,69 +678,26 @@ def root() -> str:
         <div class="card">
             <h2>API Status</h2>
             <div class="status">Status: <span id="status">Checking...</span></div>
-            <div class="status">Posledních testů: <span id="count">-</span></div>
         </div>
         
         <div class="card">
             <h2>🔗 API Endpointy</h2>
-            <a href="/api/homer-status" class="btn">Homer Status</a>
-            <a href="/api/homer-service-status" class="btn">Service Status</a>
+            <a href="/api/latest" class="btn">Latest Result</a>
+            <a href="/api/history" class="btn">History</a>
             <a href="/metrics" class="btn">Prometheus Metrics</a>
-            <a href="/health" class="btn">Health Check</a>
-            <a href="/api/results?limit=10" class="btn">Recent Results</a>
-        </div>
-        
-        <div class="card">
-            <h2>⚙️ Actions</h2>
-            <button onclick="runTest()" class="btn">🚀 Spustit test</button>
-            <span id="testResult" style="margin-left: 10px;"></span>
-        </div>
-        
-        <div class="card">
-            <h2>📊 Homer Integration</h2>
-            <p>Pro integraci s Homer dashboard použij tyto endpointy:</p>
-            <ul>
-                <li><strong>Message widget:</strong> <code>http://192.168.0.208:5001/api/homer-status</code></li>
-                <li><strong>Service status:</strong> <code>http://192.168.0.208:5001/api/homer-service-status</code></li>
-            </ul>
         </div>
     </div>
 
     <script>
     async function checkStatus() {
         try {
-            const response = await fetch('/api/results?limit=5');
+            const response = await fetch('/api/latest');
             const data = await response.json();
-            document.getElementById('status').textContent = '✅ Online';
-            document.getElementById('count').textContent = data.results ? data.results.length : 0;
+            document.getElementById('status').textContent = data.online ? '✅ Online' : '❌ Offline';
         } catch (e) {
             document.getElementById('status').textContent = '❌ Error';
         }
     }
-    
-    async function runTest() {
-        const btn = event.target;
-        const result = document.getElementById('testResult');
-        btn.disabled = true;
-        btn.textContent = '⏳ Měřím...';
-        result.textContent = 'Může trvat až 60 sekund...';
-        
-        try {
-            const response = await fetch('/api/run-now', { method: 'POST' });
-            const data = await response.json();
-            result.textContent = data.status === 'ok' ? '✅ Test dokončen' : '❌ Test selhal';
-            checkStatus();
-        } catch (e) {
-            result.textContent = '❌ Chyba: ' + e.message;
-        } finally {
-            setTimeout(() => {
-                btn.disabled = false;
-                btn.textContent = '🚀 Spustit test';
-                result.textContent = '';
-            }, 3000);
-        }
-    }
-    
     checkStatus();
     setInterval(checkStatus, 30000);
     </script>
@@ -709,7 +721,7 @@ def results_range(
     to: Optional[str] = Query(None, description="ISO 8601"),
     limit: int = Query(5000, ge=1, le=200000),
 ):
-    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu (nebo za poslední 'last')."""
+    """Vrátí výsledky z CSV/SQLite v daném časovém intervalu."""
     if last:
         dt_to = datetime.now(timezone.utc)
         dt_from = dt_to - _parse_last(last)
@@ -789,49 +801,40 @@ def export_csv(
 
 @app.get("/api/config")
 def get_config():
-    # map interních hodnot na strukturu pro dashboard
     return {
         "general": {
             "test_interval": max(1, int(INTERVAL_SEC // 60)) if isinstance(INTERVAL_SEC, (int, float)) else 5,
-            "auto_test_enabled": True,  # interně se nepoužívá, necháme zapnuté
+            "auto_test_enabled": True,
         },
         "tests": {
             "speed_test_enabled": bool(ENABLE_SPEEDTEST),
-            "speed_test_interval": 6,  # interně nemáme N-tý test, necháme pro UI default
+            "speed_test_interval": 6,
             "ping": {
-                "enabled": True,  # ping je vždy aktivní v aktuální implementaci
+                "enabled": True,
                 "count": int(PING_COUNT),
             },
         },
-        # TARGETS interně držíme jako list stringů; UI chce objekty
         "ping_targets": [
             {"name": h, "host": h, "enabled": True} for h in (TARGETS or [])
         ],
     }
 
-
-from fastapi import Body
-
 @app.post("/api/config")
 def set_config(payload: Dict[str, Any] = Body(...)):
     global INTERVAL_SEC, PING_COUNT, TARGETS, ENABLE_SPEEDTEST, SPEEDTEST_EXTRA
 
-    # ----- general -----
     general = payload.get("general", {})
     if "test_interval" in general:
-        # UI posílá minuty -> interně máme sekundy
         try:
             minutes = int(general["test_interval"])
             INTERVAL_SEC = max(5, minutes * 60)
         except Exception:
             pass
 
-    # ----- tests -----
     tests = payload.get("tests", {})
-    # speedtest zap/vyp
     if "speed_test_enabled" in tests:
         ENABLE_SPEEDTEST = bool(tests["speed_test_enabled"])
-    # ping count
+    
     ping_cfg = tests.get("ping", {})
     if "count" in ping_cfg:
         try:
@@ -839,8 +842,6 @@ def set_config(payload: Dict[str, Any] = Body(...)):
         except Exception:
             pass
 
-    # ----- ping targets -----
-    # UI posílá list objektů {name, host, enabled}; interně držíme list hostů (stringy) a ignorujeme disabled
     if "ping_targets" in payload and isinstance(payload["ping_targets"], list):
         new_targets = []
         for t in payload["ping_targets"]:
@@ -848,10 +849,8 @@ def set_config(payload: Dict[str, Any] = Body(...)):
             enabled = bool(t.get("enabled", True))
             if host and enabled:
                 new_targets.append(host)
-        # Pokud nic nezůstalo, necháme aspoň default 8.8.8.8, ať měření neodumře
         TARGETS = new_targets or ["8.8.8.8"]
 
-    # server_id (pokud by přišel v novém payloadu – zatím UI neposílá)
     if "server_id" in payload:
         sid = payload["server_id"]
         if sid is None or (isinstance(sid, int) and sid <= 0):
@@ -868,9 +867,7 @@ def set_config(payload: Dict[str, Any] = Body(...)):
                 cleaned.append(x)
             SPEEDTEST_EXTRA = cleaned + ["--server-id", str(int(sid))]
 
-    # Vrátíme status a aktuální config pro UI
     return {"status": "success", "config": get_config()}
-
 
 @app.get("/health")
 def health():
@@ -894,12 +891,19 @@ def run_now():
 # =========================
 if __name__ == "__main__":
     print("🚀 Spouštím Internet Quality Monitor...")
+    print(f"📊 Configuration:")
+    print(f"   - Interval: {INTERVAL_SEC}s")
+    print(f"   - Speedtest: {'Enabled' if ENABLE_SPEEDTEST else 'Disabled'}")
+    print(f"   - Targets: {', '.join(TARGETS)}")
+    print(f"   - Port: {PORT}")
+    
     ensure_csv_header()
     init_sqlite()
 
     import threading
     th = threading.Thread(target=loop, daemon=True)
     th.start()
-    print(f"📊 Monitoring spuštěn na portu {PORT}")
+    print(f"📊 Monitoring thread started")
+    print(f"🌐 Web interface: http://localhost:{PORT}")
 
-    uvicorn.run(app, host=BIND, port=PORT) - timedelta(hours=24)
+    uvicorn.run(app, host=BIND, port=PORT)
