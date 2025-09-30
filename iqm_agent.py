@@ -172,69 +172,115 @@ def _row_to_obj(row: List[str]) -> Dict[str, Any]:
 def run_speedtest(aggregated_rtt_ms: Optional[float] = None) -> Dict[str, float]:
     """
     Vrátí dict s download/upload (Mb/s) a ping (ms).
-    - Pokud ENABLE_SPEEDTEST = False → download/upload = 0 a ping = aggregated_rtt_ms
-    - Jinak: použij oficiální Ookla CLI s správným parsováním
+    Automaticky detekuje typ speedtest (Ookla vs Python) a použije správné parametry.
     """
     if not ENABLE_SPEEDTEST:
         return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": float(aggregated_rtt_ms or 0.0)}
 
     try:
-        # Kontrola existence speedtest binary
-        which_cmd = subprocess.run(["which", SPEEDTEST_BIN], capture_output=True, text=True)
-        if which_cmd.returncode != 0:
-            raise RuntimeError(f"Speedtest binary '{SPEEDTEST_BIN}' not found in PATH")
-
-        # Spuštění Ookla speedtest
-        cmd = [SPEEDTEST_BIN, "--format=json", "--progress=no", "--accept-license", "--accept-gdpr", *SPEEDTEST_EXTRA]
+        # Nejdřív zjistíme, jaký speedtest máme
+        version_result = subprocess.run([SPEEDTEST_BIN, "--version"], capture_output=True, text=True, timeout=5)
+        is_python_speedtest = "speedtest-cli" in version_result.stdout.lower()
         
-        print(f"Running speedtest command: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-        
-        if result.returncode != 0:
-            print(f"Speedtest error (code {result.returncode}): {result.stderr}")
-            raise RuntimeError(f"Speedtest failed with code {result.returncode}: {result.stderr}")
-        
-        # Parse JSON výstupu
-        try:
+        if is_python_speedtest or SPEEDTEST_BIN == "python_speedtest":
+            print("Using Python speedtest-cli...")
+            
+            # Python speedtest-cli používá parametr --json (ne --format=json)
+            cmd = [SPEEDTEST_BIN, "--json", "--secure"]
+            print(f"Running command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode != 0:
+                print(f"Speedtest error: {result.stderr}")
+                raise RuntimeError(f"Speedtest failed: {result.stderr}")
+            
+            try:
+                data = json.loads(result.stdout)
+            except json.JSONDecodeError as e:
+                print(f"Failed to parse JSON: {e}")
+                print(f"Raw output: {result.stdout[:500]}")
+                raise RuntimeError(f"Invalid JSON from speedtest")
+            
+            # Python speedtest-cli vrací rychlosti přímo v bits/sec
+            download_bps = data.get("download", 0)
+            upload_bps = data.get("upload", 0)
+            ping_ms = data.get("ping", 0)
+            
+            # Převod na Mbps
+            download_mbps = download_bps / 1_000_000
+            upload_mbps = upload_bps / 1_000_000
+            
+            print(f"Speedtest results: Download={download_mbps:.2f} Mbps, Upload={upload_mbps:.2f} Mbps, Ping={ping_ms:.2f} ms")
+            
+            return {
+                "download_mbps": float(download_mbps),
+                "upload_mbps": float(upload_mbps),
+                "ping_ms": float(ping_ms)
+            }
+            
+        else:
+            # Ookla official speedtest
+            print("Using Ookla speedtest...")
+            cmd = [SPEEDTEST_BIN, "--format=json", "--progress=no", "--accept-license", "--accept-gdpr", *SPEEDTEST_EXTRA]
+            print(f"Running command: {' '.join(cmd)}")
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            
+            if result.returncode != 0 or not result.stdout.strip():
+                raise RuntimeError(f"Speedtest failed or returned empty output")
+            
             data = json.loads(result.stdout)
-        except json.JSONDecodeError as e:
-            print(f"Failed to parse speedtest JSON: {e}")
-            print(f"Raw output: {result.stdout}")
-            raise RuntimeError(f"Invalid JSON from speedtest: {e}")
-        
-        # Ookla speedtest vrací rychlosti v BYTES per second
-        # Musíme převést na Mbps (megabits per second)
-        down_bytes = data.get("download", {}).get("bandwidth")
-        up_bytes = data.get("upload", {}).get("bandwidth")
-        ping_val = data.get("ping", {}).get("latency")
-        
-        # Převod bytes/s na Mbps: (bytes * 8) / 1_000_000
-        down_mbps = (down_bytes * 8 / 1_000_000) if isinstance(down_bytes, (int, float)) else None
-        up_mbps = (up_bytes * 8 / 1_000_000) if isinstance(up_bytes, (int, float)) else None
-        ping_ms = float(ping_val) if isinstance(ping_val, (int, float)) else None
-        
-        # Debug log
-        print(f"Speedtest results: Download={down_mbps:.2f} Mbps, Upload={up_mbps:.2f} Mbps, Ping={ping_ms:.2f} ms")
-        
-        if down_mbps is None or up_mbps is None or ping_ms is None:
-            raise RuntimeError(f"Incomplete speedtest data: down={down_mbps}, up={up_mbps}, ping={ping_ms}")
-        
-        # Sanity check - pokud je ping přes 1000ms, použij agregovaný ping
-        if ping_ms > 1000 and aggregated_rtt_ms is not None:
-            print(f"Warning: Speedtest ping too high ({ping_ms}ms), using aggregated ping ({aggregated_rtt_ms}ms)")
-            ping_ms = aggregated_rtt_ms
-        
-        return {"download_mbps": down_mbps, "upload_mbps": up_mbps, "ping_ms": ping_ms}
-
+            
+            # Ookla vrací v bytes/sec
+            down_bytes = data.get("download", {}).get("bandwidth", 0)
+            up_bytes = data.get("upload", {}).get("bandwidth", 0) 
+            ping_val = data.get("ping", {}).get("latency", 0)
+            
+            # Převod na Mbps
+            down_mbps = (down_bytes * 8) / 1_000_000
+            up_mbps = (up_bytes * 8) / 1_000_000
+            
+            print(f"Speedtest results: Download={down_mbps:.2f} Mbps, Upload={up_mbps:.2f} Mbps, Ping={ping_val:.2f} ms")
+            
+            return {
+                "download_mbps": float(down_mbps),
+                "upload_mbps": float(up_mbps),
+                "ping_ms": float(ping_val)
+            }
+            
     except subprocess.TimeoutExpired:
-        print("Speedtest timeout after 120 seconds")
-        raise RuntimeError("Speedtest timeout")
-    except Exception as e:
-        print(f"Speedtest error: {e}")
-        # Fallback na aggregated ping pokud speedtest selže
+        print("Speedtest timeout")
         if aggregated_rtt_ms is not None:
             return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": aggregated_rtt_ms}
-        raise RuntimeError(f"Speedtest failed: {e}")
+        raise RuntimeError("Speedtest timeout")
+        
+    except Exception as e:
+        print(f"Speedtest error: {e}")
+        
+        # Fallback na Python modul speedtest
+        try:
+            import speedtest
+            print("Falling back to Python speedtest module...")
+            st = speedtest.Speedtest(secure=True)
+            st.get_best_server()
+            
+            download = st.download() / 1_000_000  # již v Mbps
+            upload = st.upload() / 1_000_000
+            ping = float(st.results.ping)
+            
+            print(f"Module results: Download={download:.2f} Mbps, Upload={upload:.2f} Mbps, Ping={ping:.2f} ms")
+            
+            return {
+                "download_mbps": download,
+                "upload_mbps": upload,
+                "ping_ms": ping
+            }
+        except Exception as fallback_error:
+            print(f"Fallback also failed: {fallback_error}")
+            if aggregated_rtt_ms is not None:
+                return {"download_mbps": 0.0, "upload_mbps": 0.0, "ping_ms": aggregated_rtt_ms}
+            raise RuntimeError(f"All speedtest methods failed")
 
 # =========================
 # Ping / jitter / loss - VYLEPŠENÁ VERZE
